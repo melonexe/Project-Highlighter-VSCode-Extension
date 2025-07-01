@@ -1,6 +1,6 @@
 {
-  "name": "project-line-highlighter",
-  "displayName": "ProjectLine Highlighter",
+  "name": "project-highlighter",
+  "displayName": "Project Highlighter",
   "description": "Highlight lines in the editor with persistence using the Decoration API. Shows a sidebar with options to highlight the current line, remove highlights, and view highlighted lines within the entire open folder .",
   "version": "0.0.1",
   "engines": {

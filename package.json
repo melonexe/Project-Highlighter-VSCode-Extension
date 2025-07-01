@@ -10,7 +10,6 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:line-highlighter.sidebar"
   ],
   "main": "./dist/extension.js",
   "contributes": {

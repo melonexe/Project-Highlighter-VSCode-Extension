@@ -15,20 +15,49 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Store the selected color in workspaceState
 	const COLOR_KEY = 'line-highlighter.color';
+
+	// Add key for storing opacity
+	const OPACITY_KEY = 'line-highlighter.opacity';
+
+	// Define available highlight colors
+	const HIGHLIGHT_COLORS = [
+	    { name: 'Cyan', value: 'rgba(0, 204, 255, 0.49)' },
+	    { name: 'Yellow', value: 'rgba(255, 255, 0, 0.49)' },
+	    { name: 'Green', value: 'rgba(0, 255, 128, 0.49)' },
+	    { name: 'Pink', value: 'rgba(255, 0, 128, 0.49)' },
+	    { name: 'Orange', value: 'rgba(255, 128, 0, 0.49)' }
+	];
+
 	function getHighlightColor(): string {
-	    // Always return the correct cyan color
-	    return 'rgba(0, 204, 255, 0.49)';
+	    return context.workspaceState.get<string>(COLOR_KEY, HIGHLIGHT_COLORS[0].value);
 	}
 	function setHighlightColor(color: string) {
-	    // No-op: color is now fixed
+	    context.workspaceState.update(COLOR_KEY, color);
+	}
+	function getOpacity(): number {
+	    return context.workspaceState.get<number>(OPACITY_KEY, 0.2);
+	}
+	function setOpacity(opacity: number) {
+	    context.workspaceState.update(OPACITY_KEY, opacity);
 	}
 
-	// Decoration type for highlighted lines
-	function createDecorationType(color: string) {
-	    return vscode.window.createTextEditorDecorationType({
-	        backgroundColor: color,
+	// Persistent decoration types for each color
+	const decorationTypes: { [color: string]: vscode.TextEditorDecorationType } = {};
+	HIGHLIGHT_COLORS.forEach(c => {
+	    decorationTypes[c.value] = vscode.window.createTextEditorDecorationType({
+	        backgroundColor: c.value,
 	        isWholeLine: true
 	    });
+	});
+	function createDecorationType(color: string) {
+	    // Use persistent decoration type
+	    if (!decorationTypes[color]) {
+	        decorationTypes[color] = vscode.window.createTextEditorDecorationType({
+	            backgroundColor: color,
+	            isWholeLine: true
+	        });
+	    }
+	    return decorationTypes[color];
 	}
 	let highlightDecorationType = createDecorationType(getHighlightColor());
 
@@ -36,25 +65,66 @@ export function activate(context: vscode.ExtensionContext) {
 	    return document.uri.toString();
 	}
 
-	function getHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument): number[] {
-	    const all = context.workspaceState.get<{ [key: string]: number[] }>(HIGHLIGHT_KEY, {});
+	// Refactored: highlights are now stored as { line: number, color: string }[] per file
+	function getHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument): { line: number, color: string }[] {
+	    const all = context.workspaceState.get<{ [key: string]: { line: number, color: string }[] }>(HIGHLIGHT_KEY, {});
 	    return all[getFileKey(document)] || [];
 	}
-
-	function setHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument, lines: number[]) {
-	    const all = context.workspaceState.get<{ [key: string]: number[] }>(HIGHLIGHT_KEY, {});
-	    all[getFileKey(document)] = lines;
+	function setHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument, highlights: { line: number, color: string }[]) {
+	    const all = context.workspaceState.get<{ [key: string]: { line: number, color: string }[] }>(HIGHLIGHT_KEY, {});
+	    all[getFileKey(document)] = highlights;
 	    context.workspaceState.update(HIGHLIGHT_KEY, all);
 	}
 
 	function updateAllDecorations() {
+	    highlightDecorationType = createDecorationType(getHighlightColor());
 	    vscode.window.visibleTextEditors.forEach(editor => updateDecorations(editor, context));
 	}
 
+	// Helper to apply opacity to rgba color string
+	function withOpacity(rgba: string, opacity: number): string {
+	    const match = rgba.match(/rgba?\((\d+), ?(\d+), ?(\d+)(?:, ?([\d.]+))?\)/);
+	    if (!match) return rgba;
+	    const [_, r, g, b] = match;
+	    return `rgba(${r},${g},${b},${opacity})`;
+	}
+
+	// Update decoration types to use current opacity
+	function updateAllDecorationTypes() {
+	    const opacity = getOpacity();
+	    Object.keys(decorationTypes).forEach(k => {
+	        decorationTypes[k].dispose();
+	        delete decorationTypes[k];
+	    });
+	    HIGHLIGHT_COLORS.forEach(c => {
+	        const colorWithOpacity = withOpacity(c.value, opacity);
+	        decorationTypes[colorWithOpacity] = vscode.window.createTextEditorDecorationType({
+	            backgroundColor: colorWithOpacity,
+	            isWholeLine: true
+	        });
+	    });
+	}
+
+	// Update decorations to use color with current opacity
 	function updateDecorations(editor: vscode.TextEditor, context: vscode.ExtensionContext) {
-	    const lines = getHighlights(context, editor.document);
-	    const ranges = lines.map(line => new vscode.Range(line, 0, line, editor.document.lineAt(line).text.length));
-	    editor.setDecorations(highlightDecorationType, ranges);
+	    const highlights = getHighlights(context, editor.document);
+	    const opacity = getOpacity();
+	    // Remove all decorations first
+	    HIGHLIGHT_COLORS.forEach(c => {
+	        const colorWithOpacity = withOpacity(c.value, opacity);
+	        const deco = decorationTypes[colorWithOpacity];
+	        if (deco) editor.setDecorations(deco, []);
+	    });
+	    const colorMap: { [color: string]: vscode.Range[] } = {};
+	    highlights.forEach(h => {
+	        const colorWithOpacity = withOpacity(h.color, opacity);
+	        if (!colorMap[colorWithOpacity]) colorMap[colorWithOpacity] = [];
+	        colorMap[colorWithOpacity].push(new vscode.Range(h.line, 0, h.line, editor.document.lineAt(h.line).text.length));
+	    });
+	    Object.keys(colorMap).forEach(color => {
+	        const deco = decorationTypes[color];
+	        if (deco) editor.setDecorations(deco, colorMap[color]);
+	    });
 	}
 
 	// The command has been defined in the package.json file
@@ -70,9 +140,9 @@ export function activate(context: vscode.ExtensionContext) {
 	// Keep a reference to the current webviewView
 	let currentWebviewView: vscode.WebviewView | undefined;
 
-	// Helper to get all highlights across all files
+	// Helper to get all highlights across all files (now returns { line, color }[])
 	function getAllHighlights(context: vscode.ExtensionContext) {
-	    const all = context.workspaceState.get<{ [key: string]: number[] }>(HIGHLIGHT_KEY, {});
+	    const all = context.workspaceState.get<{ [key: string]: { line: number, color: string }[] }>(HIGHLIGHT_KEY, {});
 	    return all;
 	}
 	// Helper to get all block names
@@ -94,35 +164,37 @@ export function activate(context: vscode.ExtensionContext) {
 	    if (currentWebviewView) {
 	        const editor = vscode.window.activeTextEditor;
 	        if (!editor) return;
-	        const lines = getHighlights(context, editor.document).sort((a, b) => a - b);
-	        // Group consecutive lines into blocks
-	        const blocks = [];
-	        let block: number[] = [];
-	        for (let i = 0; i < lines.length; i++) {
-	            if (block.length === 0 || lines[i] === block[block.length - 1] + 1) {
-	                block.push(lines[i]);
+	        const highlights = getHighlights(context, editor.document).sort((a, b) => a.line - b.line || a.color.localeCompare(b.color));
+	        // Group consecutive lines with the same color into blocks
+	        const blocks: { lines: number[], color: string }[] = [];
+	        let block: { lines: number[], color: string } | null = null;
+	        for (let i = 0; i < highlights.length; i++) {
+	            const h = highlights[i];
+	            if (!block || h.line !== block.lines[block.lines.length - 1] + 1 || h.color !== block.color) {
+	                if (block) blocks.push(block);
+	                block = { lines: [h.line], color: h.color };
 	            } else {
-	                blocks.push([...block]);
-	                block = [lines[i]];
+	                block.lines.push(h.line);
 	            }
 	        }
-	        if (block.length) blocks.push(block);
+	        if (block) blocks.push(block);
 	        // All blocks in all files
 	        const allHighlights = getAllHighlights(context);
 	        const blockNames = getBlockNames(context);
-	        const allBlocks: Array<{ file: string, fileName: string, block: number[], name?: string }> = [];
+	        const allBlocks: Array<{ file: string, fileName: string, block: number[], color: string, name?: string }> = [];
 	        for (const file in allHighlights) {
-	            const fileLines = allHighlights[file].sort((a, b) => a - b);
-	            let b: number[] = [];
-	            for (let i = 0; i < fileLines.length; i++) {
-	                if (b.length === 0 || fileLines[i] === b[b.length - 1] + 1) {
-	                    b.push(fileLines[i]);
+	            const fileHighlights = (allHighlights[file] || []).sort((a, b) => a.line - b.line || a.color.localeCompare(b.color));
+	            let b: { lines: number[], color: string } | null = null;
+	            for (let i = 0; i < fileHighlights.length; i++) {
+	                const h = fileHighlights[i];
+	                if (!b || h.line !== b.lines[b.lines.length - 1] + 1 || h.color !== b.color) {
+	                    if (b) allBlocks.push({ file, fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file, block: [...b.lines], color: b.color, name: blockNames[file]?.[blockKeyFromLines(b.lines)] });
+	                    b = { lines: [h.line], color: h.color };
 	                } else {
-	                    allBlocks.push({ file, fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file, block: [...b], name: blockNames[file]?.[blockKeyFromLines(b)] });
-	                    b = [fileLines[i]];
+	                    b.lines.push(h.line);
 	                }
 	            }
-	            if (b.length) allBlocks.push({ file, fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file, block: [...b], name: blockNames[file]?.[blockKeyFromLines(b)] });
+	            if (b) allBlocks.push({ file, fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file, block: [...b.lines], color: b.color, name: blockNames[file]?.[blockKeyFromLines(b.lines)] });
 	        }
 	        currentWebviewView.webview.postMessage({ type: 'highlightBlocks', blocks, allBlocks });
 	    }
@@ -135,13 +207,14 @@ export function activate(context: vscode.ExtensionContext) {
 	        const selection = editor.selection;
 	        const start = selection.start.line;
 	        const end = selection.end.line;
-	        let lines = getHighlights(context, editor.document);
+	        let highlights = getHighlights(context, editor.document);
+	        const color = getHighlightColor();
 	        for (let line = start; line <= end; line++) {
-	            if (!lines.includes(line)) {
-	                lines.push(line);
+	            if (!highlights.some(h => h.line === line)) {
+	                highlights.push({ line, color });
 	            }
 	        }
-	        setHighlights(context, editor.document, lines);
+	        setHighlights(context, editor.document, highlights);
 	        updateDecorations(editor, context);
 	        tryPostHighlights();
 	    })
@@ -153,9 +226,9 @@ export function activate(context: vscode.ExtensionContext) {
 	        const selection = editor.selection;
 	        const start = selection.start.line;
 	        const end = selection.end.line;
-	        let lines = getHighlights(context, editor.document);
-	        lines = lines.filter(line => line < start || line > end);
-	        setHighlights(context, editor.document, lines);
+	        let highlights = getHighlights(context, editor.document);
+	        highlights = highlights.filter(h => h.line < start || h.line > end);
+	        setHighlights(context, editor.document, highlights);
 	        updateDecorations(editor, context);
 	        tryPostHighlights();
 	    })
@@ -173,9 +246,13 @@ export function activate(context: vscode.ExtensionContext) {
 	            webviewView.webview.onDidReceiveMessage(async msg => {
 	                if (msg.type === 'setColor') {
 	                    setHighlightColor(msg.color);
-	                    highlightDecorationType = createDecorationType(msg.color);
-	                    updateAllDecorations();
 	                    webviewView.webview.html = getSidebarHtml(msg.color);
+	                    tryPostHighlights();
+	                } else if (msg.type === 'setOpacity') {
+	                    setOpacity(msg.value);
+	                    updateAllDecorationTypes();
+	                    updateAllDecorations();
+	                    webviewView.webview.html = getSidebarHtml(getHighlightColor());
 	                    tryPostHighlights();
 	                } else if (msg.type === 'revealBlock') {
 	                    const editor = vscode.window.activeTextEditor;
@@ -186,9 +263,10 @@ export function activate(context: vscode.ExtensionContext) {
 	                } else if (msg.type === 'removeBlock') {
 	                    const editor = vscode.window.activeTextEditor;
 	                    if (!editor) return;
-	                    let lines = getHighlights(context, editor.document);
-	                    lines = lines.filter(line => !msg.block.includes(line));
-	                    setHighlights(context, editor.document, lines);
+	                    let highlights = getHighlights(context, editor.document);
+	                    // Remove highlights that match both line and color for the block
+	                    highlights = highlights.filter(h => !(msg.block.includes(h.line) && h.color === (msg.color || getHighlightColor())));
+	                    setHighlights(context, editor.document, highlights);
 	                    updateDecorations(editor, context);
 	                    tryPostHighlights();
 	                } else if (msg.type === 'revealBlockGlobal') {
@@ -199,9 +277,9 @@ export function activate(context: vscode.ExtensionContext) {
 	                    editor.revealRange(new vscode.Range(start, 0, end, doc.lineAt(end).text.length));
 	                } else if (msg.type === 'removeBlockGlobal') {
 	                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(msg.file));
-	                    let lines = getHighlights(context, doc);
-	                    lines = lines.filter(line => !msg.block.includes(line));
-	                    setHighlights(context, doc, lines);
+	                    let highlights = getHighlights(context, doc);
+	                    highlights = highlights.filter(h => !(msg.block.includes(h.line) && h.color === (msg.color || getHighlightColor())));
+	                    setHighlights(context, doc, highlights);
 	                    updateDecorations(await vscode.window.showTextDocument(doc), context);
 	                    tryPostHighlights();
 	                } else if (msg.type === 'renameBlock') {
@@ -216,17 +294,28 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 
 	function getSidebarHtml(currentColor: string) {
-	    // Always show the correct cyan color in the preview
+	    const opacity = getOpacity();
+	    // Color selection UI
+	    const colorOptions = HIGHLIGHT_COLORS.map(c =>
+	        `<button onclick="vscode.postMessage({ type: 'setColor', color: '${c.value}' })" style="width:28px;height:28px;margin:2px;border:${currentColor === c.value ? '2px solid #333' : '1px solid #ccc'};background:${c.value};cursor:pointer;" title="${c.name}"></button>`
+	    ).join('');
 	    return [
 	        '<html><body>',
 	        '<h3>Highlight Color</h3>',
-	        '<div style="margin-bottom:10px;">Current color: <span style="display:inline-block;width:24px;height:24px;background:#00c8ff;border:1px solid #ccc;vertical-align:middle;"></span></div>',
+	        `<div style="margin-bottom:10px;">Choose: ${colorOptions}</div>`,
+	        `<div style="margin-bottom:10px;">Opacity: <input id="opacitySlider" type="range" min="0.1" max="1" step="0.01" value="${opacity}" style="vertical-align:middle;width:120px;" /> <span id="opacityValue">${Math.round(opacity*100)}%</span></div>`,
 	        '<h3>Highlighted Blocks (Current File)</h3>',
 	        '<ul id="blocks"></ul>',
 	        '<h3>All Highlighted Blocks</h3>',
 	        '<ul id="allBlocks"></ul>',
 	        '<script>',
 	        'const vscode = acquireVsCodeApi();',
+	        'const slider = document.getElementById("opacitySlider");',
+	        'const valSpan = document.getElementById("opacityValue");',
+	        'slider.oninput = function() {',
+	        '  valSpan.textContent = Math.round(slider.value*100) + "%";',
+	        '  vscode.postMessage({ type: "setOpacity", value: parseFloat(slider.value) });',
+	        '};',
 	        'window.addEventListener("message", function(event) {',
 	        '  if (event.data.type === "highlightBlocks") {',
 	        '    // Current file blocks',
@@ -234,11 +323,11 @@ export function activate(context: vscode.ExtensionContext) {
 	        '    const ul = document.getElementById("blocks");',
 	        '    ul.innerHTML = "";',
 	        '    blocks.forEach(function(block) {',
-	        '      var label = block.length === 1 ? "Line " + (block[0] + 1) : "Lines " + (block[0] + 1) + "-" + (block[block.length - 1] + 1);',
+	        '      var label = block.lines.length === 1 ? "Line " + (block.lines[0] + 1) : "Lines " + (block.lines[0] + 1) + "-" + (block.lines[block.lines.length - 1] + 1);',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = "<span style=\'cursor:pointer;color:#007acc\' class=\'reveal\'>" + label + "</span> <button class=\'remove\'>Remove</button>";',
-	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlock", block: block }); };',
-	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlock", block: block }); };',
+	        '      li.innerHTML = `<span style=\'cursor:pointer;color:#007acc\' class=\'reveal\'>${label}</span> <button class=\'remove\'>Remove</button>`;',
+	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlock", block: block.lines }); };',
+	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlock", block: block.lines, color: block.color }); };',
 	        '      ul.appendChild(li);',
 	        '    });',
 	        '    // All blocks in all files',
@@ -249,11 +338,9 @@ export function activate(context: vscode.ExtensionContext) {
 	        '      var label = entry.block.length === 1 ? "Line " + (entry.block[0] + 1) : "Lines " + (entry.block[0] + 1) + "-" + (entry.block[entry.block.length - 1] + 1);',
 	        '      var name = entry.name || "";',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = "<b>" + entry.fileName + "</b>: <span style=\'cursor:pointer;color:#007acc\' class=\'reveal\'>" + label + "</span> " +',
-	        '        "<input type=\'text\' class=\'blockName\' value=\'" + name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;") + "\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> " +',
-	        '        "<button class=\'remove\'>Remove</button>";',
+	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:#007acc\' class=\'reveal\'>${label}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'remove\'>Remove</button>`;',
 	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlockGlobal", file: entry.file, block: entry.block }); };',
-	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlockGlobal", file: entry.file, block: entry.block }); };',
+	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlockGlobal", file: entry.file, block: entry.block, color: entry.color }); };',
 	        '      li.querySelector(".blockName").onchange = function(e) { vscode.postMessage({ type: "renameBlock", file: entry.file, block: entry.block, name: e.target.value }); };',
 	        '      allUl.appendChild(li);',
 	        '    });',
@@ -284,6 +371,10 @@ export function activate(context: vscode.ExtensionContext) {
     if (vscode.window.activeTextEditor) {
         updateDecorations(vscode.window.activeTextEditor, context);
     }
+
+    // Ensure correct opacity and decorations on activation
+    updateAllDecorationTypes();
+    updateAllDecorations();
 }
 
 // This method is called when your extension is deactivated

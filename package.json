@@ -71,9 +71,9 @@
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.5.2"
   },
-  "publisher": "AlexCS",
+  "publisher": "lex-c",
   "repository": {
     "type": "git",
-    "url": "https://github.com/melonexe/VScode-tools"
+    "url": "https://github.com/melonexe/Project-Highlighter-VSCode-Extension"
   }
 }

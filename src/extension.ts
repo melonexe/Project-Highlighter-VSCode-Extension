@@ -22,10 +22,10 @@ export function activate(context: vscode.ExtensionContext) {
 	// Define available highlight colors
 	const HIGHLIGHT_COLORS = [
 	    { name: 'Cyan', value: 'rgba(0, 204, 255, 0.49)' },
-	    { name: 'Yellow', value: 'rgba(255, 255, 0, 0.49)' },
+	    { name: 'Yellow', value: 'rgba(255, 187, 0, 0.49)' },
 	    { name: 'Green', value: 'rgba(0, 255, 128, 0.49)' },
-	    { name: 'Pink', value: 'rgba(255, 0, 128, 0.49)' },
-	    { name: 'Orange', value: 'rgba(255, 128, 0, 0.49)' }
+	    { name: 'Pink', value: 'rgba(255, 0, 0, 0.49)' },
+	    { name: 'Orange', value: 'rgba(174, 0, 255, 0.49)' }
 	];
 
 	function getHighlightColor(): string {
@@ -325,7 +325,10 @@ export function activate(context: vscode.ExtensionContext) {
 	        '    blocks.forEach(function(block) {',
 	        '      var label = block.lines.length === 1 ? "Line " + (block.lines[0] + 1) : "Lines " + (block.lines[0] + 1) + "-" + (block.lines[block.lines.length - 1] + 1);',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<span style=\'cursor:pointer;color:#007acc\' class=\'reveal\'>${label}</span> <button class=\'remove\'>Remove</button>`;',
+	        '      li.innerHTML = `<span style=\'cursor:pointer;color:${block.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <button class=\'remove\'>Remove</button>`;',
+	        '      li.style.background = "";',
+	        '      li.style.borderRadius = "4px";',
+	        '      li.style.marginBottom = "2px";',
 	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlock", block: block.lines }); };',
 	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlock", block: block.lines, color: block.color }); };',
 	        '      ul.appendChild(li);',
@@ -338,7 +341,10 @@ export function activate(context: vscode.ExtensionContext) {
 	        '      var label = entry.block.length === 1 ? "Line " + (entry.block[0] + 1) : "Lines " + (entry.block[0] + 1) + "-" + (entry.block[entry.block.length - 1] + 1);',
 	        '      var name = entry.name || "";',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:#007acc\' class=\'reveal\'>${label}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'remove\'>Remove</button>`;',
+	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:${entry.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'remove\'>Remove</button>`;',
+	        '      li.style.background = "";',
+	        '      li.style.borderRadius = "4px";',
+	        '      li.style.marginBottom = "2px";',
 	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlockGlobal", file: entry.file, block: entry.block }); };',
 	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlockGlobal", file: entry.file, block: entry.block, color: entry.color }); };',
 	        '      li.querySelector(".blockName").onchange = function(e) { vscode.postMessage({ type: "renameBlock", file: entry.file, block: entry.block, name: e.target.value }); };',

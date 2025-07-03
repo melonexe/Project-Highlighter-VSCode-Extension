@@ -27,6 +27,27 @@
         "title": "Remove Highlight from Current Line"
       }
     ],
+    "keybindings": [
+      {
+        "command": "line-highlighter.highlightLine",
+        "key": "ctrl+shift+h",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "line-highlighter.highlightLine",
+          "when": "editorTextFocus",
+          "group": "navigation@10"
+        },
+        {
+          "command": "line-highlighter.removeHighlight",
+          "when": "editorTextFocus",
+          "group": "navigation@11"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {

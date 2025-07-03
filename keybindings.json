@@ -1,0 +1,7 @@
+[
+  {
+    "key": "ctrl+shift+h",
+    "command": "line-highlighter.highlightLine",
+    "when": "editorTextFocus"
+  }
+]

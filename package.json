@@ -98,6 +98,6 @@
     "url": "https://github.com/melonexe/Project-Highlighter-VSCode-Extension"
   },
   "dependencies": {
-    "vscode": "^1.1.37"
+    
   }
 }

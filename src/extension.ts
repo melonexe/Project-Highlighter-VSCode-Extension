@@ -244,16 +244,18 @@ export function activate(context: vscode.ExtensionContext) {
 	            webviewView.webview.html = getSidebarHtml(getHighlightColor());
 	            tryPostHighlights();
 	            webviewView.webview.onDidReceiveMessage(async msg => {
-	                if (msg.type === 'setColor') {
+	                if (msg.type === 'sidebarReady') {
+	                    tryPostHighlights();
+	                } else if (msg.type === 'setColor') {
 	                    setHighlightColor(msg.color);
 	                    webviewView.webview.html = getSidebarHtml(msg.color);
-	                    tryPostHighlights();
+	                    // tryPostHighlights will be called by sidebarReady after reload
 	                } else if (msg.type === 'setOpacity') {
 	                    setOpacity(msg.value);
 	                    updateAllDecorationTypes();
 	                    updateAllDecorations();
 	                    webviewView.webview.html = getSidebarHtml(getHighlightColor());
-	                    tryPostHighlights();
+	                    // tryPostHighlights will be called by sidebarReady after reload
 	                } else if (msg.type === 'revealBlock') {
 	                    const editor = vscode.window.activeTextEditor;
 	                    if (!editor) return;
@@ -310,6 +312,9 @@ export function activate(context: vscode.ExtensionContext) {
 	        '<ul id="allBlocks"></ul>',
 	        '<script>',
 	        'const vscode = acquireVsCodeApi();',
+	        'window.addEventListener("DOMContentLoaded", function() {',
+	        '  vscode.postMessage({ type: "sidebarReady" });',
+	        '});',
 	        'const slider = document.getElementById("opacitySlider");',
 	        'const valSpan = document.getElementById("opacityValue");',
 	        'slider.oninput = function() {',
@@ -370,7 +375,16 @@ export function activate(context: vscode.ExtensionContext) {
             if (editor && event.document === editor.document) {
                 updateDecorations(editor, context);
             }
-        }, null, context.subscriptions)
+        }, null, context.subscriptions),
+        vscode.workspace.onDidOpenTextDocument(() => {
+            // Update all visible editors when a new document is opened
+            updateAllDecorations();
+            tryPostHighlights();
+        }),
+        vscode.window.onDidChangeVisibleTextEditors(() => {
+            updateAllDecorations();
+            tryPostHighlights();
+        })
     );
 
     // On activation, update decorations for the current editor

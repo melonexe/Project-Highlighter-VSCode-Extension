@@ -37,6 +37,9 @@ This extension does not add any user-configurable settings.
 
 ## Release Notes
 
+### 0.0.4
+- Added assignable keybind functions
+
 ### 0.0.2
 - Added support for multiple highlight colors.
 - Added opacity slider for real-time transparency adjustment.

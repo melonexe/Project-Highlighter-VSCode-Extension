@@ -2,7 +2,7 @@
   "name": "project-highlighter",
   "displayName": "Project Highlighter",
   "description": "Highlight lines in the editor with persistence using the Decoration API. Shows a sidebar with options to highlight the current line, remove highlights, and view highlighted lines within the entire open folder .",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "icon": "resources/line-highlighter-icon.png",
   "engines": {
     "vscode": "^1.101.0"

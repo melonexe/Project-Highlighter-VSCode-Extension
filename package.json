@@ -21,6 +21,18 @@
       {
         "command": "line-highlighter.removeHighlight",
         "title": "Remove Highlight from Current Line"
+      },
+      {
+        "command": "line-highlighter.copyHighlightsByColor",
+        "title": "Copy Highlighted Lines by Color"
+      },
+      {
+        "command": "line-highlighter.copyHighlightsCurrentFile",
+        "title": "Copy All Highlighted Lines (Current File)"
+      },
+      {
+        "command": "line-highlighter.copyHighlightsAllFiles",
+        "title": "Copy All Highlighted Lines (All Files)"
       }
     ],
     "keybindings": [
@@ -41,9 +53,31 @@
           "command": "line-highlighter.removeHighlight",
           "when": "editorTextFocus",
           "group": "navigation@11"
+        },
+        {
+          "submenu": "line-highlighter.copySubmenu",
+          "when": "editorTextFocus",
+          "group": "navigation@12"
+        }
+      ],
+      "line-highlighter.copySubmenu": [
+        {
+          "command": "line-highlighter.copyHighlightsByColor"
+        },
+        {
+          "command": "line-highlighter.copyHighlightsCurrentFile"
+        },
+        {
+          "command": "line-highlighter.copyHighlightsAllFiles"
         }
       ]
     },
+    "submenus": [
+      {
+        "id": "line-highlighter.copySubmenu",
+        "label": "Copy Highlighted Lines"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {

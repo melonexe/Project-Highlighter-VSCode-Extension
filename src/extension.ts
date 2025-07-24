@@ -46,7 +46,9 @@ export function activate(context: vscode.ExtensionContext) {
 	HIGHLIGHT_COLORS.forEach(c => {
 	    decorationTypes[c.value] = vscode.window.createTextEditorDecorationType({
 	        backgroundColor: c.value,
-	        isWholeLine: true
+	        isWholeLine: true,
+	        overviewRulerColor: c.value,
+	        overviewRulerLane: vscode.OverviewRulerLane.Full
 	    });
 	});
 	function createDecorationType(color: string) {
@@ -54,7 +56,9 @@ export function activate(context: vscode.ExtensionContext) {
 	    if (!decorationTypes[color]) {
 	        decorationTypes[color] = vscode.window.createTextEditorDecorationType({
 	            backgroundColor: color,
-	            isWholeLine: true
+	            isWholeLine: true,
+	            overviewRulerColor: color,
+	            overviewRulerLane: vscode.OverviewRulerLane.Full
 	        });
 	    }
 	    return decorationTypes[color];
@@ -100,7 +104,9 @@ export function activate(context: vscode.ExtensionContext) {
 	        const colorWithOpacity = withOpacity(c.value, opacity);
 	        decorationTypes[colorWithOpacity] = vscode.window.createTextEditorDecorationType({
 	            backgroundColor: colorWithOpacity,
-	            isWholeLine: true
+	            isWholeLine: true,
+	            overviewRulerColor: colorWithOpacity,
+	            overviewRulerLane: vscode.OverviewRulerLane.Full
 	        });
 	    });
 	}
@@ -234,6 +240,126 @@ export function activate(context: vscode.ExtensionContext) {
 	    })
 	);
 
+	// Copy functionality
+	async function copyHighlightedLines(highlights: { line: number, color: string }[], document: vscode.TextDocument, fileHeader?: string): Promise<string> {
+	    const lines: string[] = [];
+	    
+	    if (fileHeader) {
+	        lines.push(fileHeader);
+	        lines.push(''); // Empty line after header
+	    }
+	    
+	    // Sort highlights by line number
+	    const sortedHighlights = highlights.sort((a, b) => a.line - b.line);
+	    
+	    for (const highlight of sortedHighlights) {
+	        try {
+	            const lineText = document.lineAt(highlight.line).text;
+	            lines.push(lineText);
+	        } catch (error) {
+	            // Line might not exist anymore, skip it
+	            console.warn(`Line ${highlight.line} not found in document`);
+	        }
+	    }
+	    
+	    return lines.join('\n');
+	}
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.copyHighlightsByColor', async () => {
+	        const editor = vscode.window.activeTextEditor;
+	        if (!editor) {
+	            vscode.window.showWarningMessage('No active editor');
+	            return;
+	        }
+
+	        // Show color picker
+	        const colorItems = HIGHLIGHT_COLORS.map((c, index) => ({
+	            label: `Color ${index + 1}`,
+	            detail: c.name,
+	            color: c.value
+	        }));
+
+	        const selectedColor = await vscode.window.showQuickPick(colorItems, {
+	            placeHolder: 'Select color to copy highlighted lines'
+	        });
+
+	        if (!selectedColor) return;
+
+	        const highlights = getHighlights(context, editor.document);
+	        const colorHighlights = highlights.filter(h => h.color === selectedColor.color);
+
+	        if (colorHighlights.length === 0) {
+	            vscode.window.showInformationMessage(`No highlighted lines found with ${selectedColor.label}`);
+	            return;
+	        }
+
+	        const content = await copyHighlightedLines(colorHighlights, editor.document);
+	        await vscode.env.clipboard.writeText(content);
+	        vscode.window.showInformationMessage(`Copied ${colorHighlights.length} lines from ${selectedColor.label}`);
+	    })
+	);
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.copyHighlightsCurrentFile', async () => {
+	        const editor = vscode.window.activeTextEditor;
+	        if (!editor) {
+	            vscode.window.showWarningMessage('No active editor');
+	            return;
+	        }
+
+	        const highlights = getHighlights(context, editor.document);
+	        
+	        if (highlights.length === 0) {
+	            vscode.window.showInformationMessage('No highlighted lines found in current file');
+	            return;
+	        }
+
+	        const content = await copyHighlightedLines(highlights, editor.document);
+	        await vscode.env.clipboard.writeText(content);
+	        vscode.window.showInformationMessage(`Copied ${highlights.length} highlighted lines from current file`);
+	    })
+	);
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.copyHighlightsAllFiles', async () => {
+	        const allHighlights = getAllHighlights(context);
+	        
+	        if (Object.keys(allHighlights).length === 0) {
+	            vscode.window.showInformationMessage('No highlighted lines found in any files');
+	            return;
+	        }
+
+	        const contentParts: string[] = [];
+	        let totalLines = 0;
+
+	        for (const [fileUri, highlights] of Object.entries(allHighlights)) {
+	            if (highlights.length === 0) continue;
+
+	            try {
+	                const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
+	                const fileName = vscode.workspace.asRelativePath(document.uri);
+	                const fileHeader = `${fileName}:`;
+	                
+	                const fileContent = await copyHighlightedLines(highlights, document, fileHeader);
+	                contentParts.push(fileContent);
+	                totalLines += highlights.length;
+	            } catch (error) {
+	                console.warn(`Failed to open document: ${fileUri}`, error);
+	            }
+	        }
+
+	        if (contentParts.length === 0) {
+	            vscode.window.showInformationMessage('No valid highlighted lines found');
+	            return;
+	        }
+
+	        const finalContent = contentParts.join('\n\n'); // Double newline to separate files
+	        await vscode.env.clipboard.writeText(finalContent);
+	        vscode.window.showInformationMessage(`Copied ${totalLines} highlighted lines from ${contentParts.length} files`);
+	    })
+	);
+
 	// --- Webview Sidebar Provider ---
 	context.subscriptions.push(
 	    vscode.window.registerWebviewViewProvider('line-highlighter.sidebar', {
@@ -287,6 +413,42 @@ export function activate(context: vscode.ExtensionContext) {
 	                } else if (msg.type === 'renameBlock') {
 	                    setBlockName(context, msg.file, blockKeyFromLines(msg.block), msg.name);
 	                    tryPostHighlights();
+	                } else if (msg.type === 'copyByColor') {
+	                    vscode.commands.executeCommand('line-highlighter.copyHighlightsByColor');
+	                } else if (msg.type === 'copyCurrentFile') {
+	                    vscode.commands.executeCommand('line-highlighter.copyHighlightsCurrentFile');
+	                } else if (msg.type === 'copyAllFiles') {
+	                    vscode.commands.executeCommand('line-highlighter.copyHighlightsAllFiles');
+	                } else if (msg.type === 'copyBlock') {
+	                    const editor = vscode.window.activeTextEditor;
+	                    if (!editor) return;
+	                    
+	                    // Create highlights array from the block
+	                    const blockHighlights = msg.block.map((line: number) => ({ line, color: msg.color }));
+	                    const content = await copyHighlightedLines(blockHighlights, editor.document);
+	                    await vscode.env.clipboard.writeText(content);
+	                    
+	                    const lineCount = msg.block.length;
+	                    const lineLabel = lineCount === 1 ? 'line' : 'lines';
+	                    vscode.window.showInformationMessage(`Copied ${lineCount} ${lineLabel} from block`);
+	                } else if (msg.type === 'copyBlockGlobal') {
+	                    try {
+	                        const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(msg.file));
+	                        const fileName = vscode.workspace.asRelativePath(doc.uri);
+	                        const fileHeader = `${fileName}:`;
+	                        
+	                        // Create highlights array from the block
+	                        const blockHighlights = msg.block.map((line: number) => ({ line, color: msg.color }));
+	                        const content = await copyHighlightedLines(blockHighlights, doc, fileHeader);
+	                        await vscode.env.clipboard.writeText(content);
+	                        
+	                        const lineCount = msg.block.length;
+	                        const lineLabel = lineCount === 1 ? 'line' : 'lines';
+	                        vscode.window.showInformationMessage(`Copied ${lineCount} ${lineLabel} from ${fileName}`);
+	                    } catch (error) {
+	                        vscode.window.showErrorMessage('Failed to copy block from file');
+	                        console.error('Copy block error:', error);
+	                    }
 	                }
 	            });
 	            vscode.window.onDidChangeActiveTextEditor(() => tryPostHighlights());
@@ -306,6 +468,12 @@ export function activate(context: vscode.ExtensionContext) {
 	        '<h3>Highlight Color</h3>',
 	        `<div style="margin-bottom:10px;">Choose: ${colorOptions}</div>`,
 	        `<div style="margin-bottom:10px;">Opacity: <input id="opacitySlider" type="range" min="0.1" max="1" step="0.01" value="${opacity}" style="vertical-align:middle;width:120px;" /> <span id="opacityValue">${Math.round(opacity*100)}%</span></div>`,
+	        '<h3>Copy Highlighted Lines</h3>',
+	        '<div style="margin-bottom:10px;">',
+	        '<button onclick="vscode.postMessage({ type: \'copyByColor\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy by Color</button>',
+	        '<button onclick="vscode.postMessage({ type: \'copyCurrentFile\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy Current File</button>',
+	        '<button onclick="vscode.postMessage({ type: \'copyAllFiles\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy All Files</button>',
+	        '</div>',
 	        '<h3>Highlighted Blocks (Current File)</h3>',
 	        '<ul id="blocks"></ul>',
 	        '<h3>All Highlighted Blocks</h3>',
@@ -330,11 +498,12 @@ export function activate(context: vscode.ExtensionContext) {
 	        '    blocks.forEach(function(block) {',
 	        '      var label = block.lines.length === 1 ? "Line " + (block.lines[0] + 1) : "Lines " + (block.lines[0] + 1) + "-" + (block.lines[block.lines.length - 1] + 1);',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<span style=\'cursor:pointer;color:${block.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <button class=\'remove\'>Remove</button>`;',
+	        '      li.innerHTML = `<span style=\'cursor:pointer;color:${block.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
 	        '      li.style.background = "";',
 	        '      li.style.borderRadius = "4px";',
 	        '      li.style.marginBottom = "2px";',
 	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlock", block: block.lines }); };',
+	        '      li.querySelector(".copy").onclick = function() { vscode.postMessage({ type: "copyBlock", block: block.lines, color: block.color }); };',
 	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlock", block: block.lines, color: block.color }); };',
 	        '      ul.appendChild(li);',
 	        '    });',
@@ -346,11 +515,12 @@ export function activate(context: vscode.ExtensionContext) {
 	        '      var label = entry.block.length === 1 ? "Line " + (entry.block[0] + 1) : "Lines " + (entry.block[0] + 1) + "-" + (entry.block[entry.block.length - 1] + 1);',
 	        '      var name = entry.name || "";',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:${entry.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'remove\'>Remove</button>`;',
+	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:${entry.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
 	        '      li.style.background = "";',
 	        '      li.style.borderRadius = "4px";',
 	        '      li.style.marginBottom = "2px";',
 	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlockGlobal", file: entry.file, block: entry.block }); };',
+	        '      li.querySelector(".copy").onclick = function() { vscode.postMessage({ type: "copyBlockGlobal", file: entry.file, block: entry.block, color: entry.color }); };',
 	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlockGlobal", file: entry.file, block: entry.block, color: entry.color }); };',
 	        '      li.querySelector(".blockName").onchange = function(e) { vscode.postMessage({ type: "renameBlock", file: entry.file, block: entry.block, name: e.target.value }); };',
 	        '      allUl.appendChild(li);',

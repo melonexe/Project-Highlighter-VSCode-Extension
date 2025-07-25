@@ -1,8 +1,8 @@
 {
   "name": "project-highlighter",
   "displayName": "Project Highlighter",
-  "description": "Highlight lines in the editor with persistence using the Decoration API. Shows a sidebar with options to highlight the current line, remove highlights, and view highlighted lines within the entire open folder .",
-  "version": "0.1.0",
+  "description": "Highlight lines in the editor with persistence using the Decoration API. Manually highlight selected lines or automatically highlight all occurrences of searched text. Shows a sidebar with highlighting options, copy functionality, and management tools for the entire workspace.",
+  "version": "0.1.2",
   "icon": "resources/line-highlighter-icon.png",
   "engines": {
     "vscode": "^1.101.0"
@@ -33,12 +33,43 @@
       {
         "command": "line-highlighter.copyHighlightsAllFiles",
         "title": "Copy All Highlighted Lines (All Files)"
+      },
+      {
+        "command": "line-highlighter.highlightCurrentSearchResults",
+        "title": "Highlight Current Search Results"
+      },
+      {
+        "command": "line-highlighter.highlightGlobalSearchResults",
+        "title": "Highlight Global Search Results"
+      },
+      {
+        "command": "line-highlighter.clearAllHighlightsCurrentFile",
+        "title": "Clear All Highlights (Current File)"
+      },
+      {
+        "command": "line-highlighter.clearAllHighlightsWorkspace",
+        "title": "Clear All Highlights (Entire Workspace)"
       }
     ],
     "keybindings": [
       {
         "command": "line-highlighter.highlightLine",
         "key": "ctrl+shift+h",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "line-highlighter.highlightLine",
+        "key": "button3",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "line-highlighter.removeHighlight",
+        "key": "shift+button3",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "line-highlighter.copyHighlightsCurrentFile",
+        "key": "button4",
         "when": "editorTextFocus"
       }
     ],

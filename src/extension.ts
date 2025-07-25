@@ -360,6 +360,244 @@ export function activate(context: vscode.ExtensionContext) {
 	    })
 	);
 
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.highlightCurrentSearchResults', async () => {
+	        const editor = vscode.window.activeTextEditor;
+	        if (!editor) {
+	            vscode.window.showWarningMessage('No active editor');
+	            return;
+	        }
+
+	        // Get the current search term from the find widget
+	        const searchTerm = await vscode.window.showInputBox({
+	            prompt: 'Enter search term to highlight (use same term as your current find)',
+	            placeHolder: 'Search term from find widget...',
+	            value: '', // Could potentially get this from clipboard or selection
+	        });
+
+	        if (!searchTerm) return;
+
+	        const document = editor.document;
+	        const text = document.getText();
+	        const highlights = getHighlights(context, document);
+	        const color = getHighlightColor();
+	        let matchCount = 0;
+	        let totalMatches = 0;
+
+	        // Use regex to find all matches (like VS Code's find does)
+	        const regex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+	        const lines = text.split('\n');
+	        
+	        for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+	            const line = lines[lineIndex];
+	            const matches = line.match(regex);
+	            if (matches) {
+	                totalMatches += matches.length;
+	                // Only add if not already highlighted
+	                if (!highlights.some(h => h.line === lineIndex)) {
+	                    highlights.push({ line: lineIndex, color });
+	                    matchCount++;
+	                }
+	            }
+	        }
+
+	        if (matchCount === 0 && totalMatches === 0) {
+	            vscode.window.showInformationMessage(`No matches found for "${searchTerm}" in current file`);
+	            return;
+	        }
+
+	        if (matchCount === 0) {
+	            vscode.window.showInformationMessage(`Found ${totalMatches} matches for "${searchTerm}", but all matching lines are already highlighted`);
+	            return;
+	        }
+
+	        setHighlights(context, document, highlights);
+	        updateDecorations(editor, context);
+	        tryPostHighlights();
+	        
+	        const totalLabel = totalMatches !== matchCount ? ` (${totalMatches} total matches)` : '';
+	        vscode.window.showInformationMessage(`Highlighted ${matchCount} new lines containing "${searchTerm}"${totalLabel}`);
+	    })
+	);
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.highlightGlobalSearchResults', async () => {
+	        // First check if search results are visible
+	        const searchTerm = await vscode.window.showInputBox({
+	            prompt: 'Enter search term to highlight from global search results',
+	            placeHolder: 'Search term from search panel (Ctrl+Shift+F)...'
+	        });
+
+	        if (!searchTerm) return;
+
+	        const color = getHighlightColor();
+	        let totalMatches = 0;
+	        let filesProcessed = 0;
+	        let totalLines = 0;
+
+	        // Show progress
+	        await vscode.window.withProgress({
+	            location: vscode.ProgressLocation.Notification,
+	            title: `Highlighting search results for "${searchTerm}"...`,
+	            cancellable: false
+	        }, async (progress) => {
+	            // Find all text files in workspace
+	            const files = await vscode.workspace.findFiles('**/*', '**/node_modules/**');
+	            
+	            for (let i = 0; i < files.length; i++) {
+	                const file = files[i];
+	                progress.report({ 
+	                    increment: (100 / files.length), 
+	                    message: `Processing ${vscode.workspace.asRelativePath(file)}...` 
+	                });
+
+	                try {
+	                    const document = await vscode.workspace.openTextDocument(file);
+	                    
+	                    // Skip binary files
+	                    if (document.languageId === 'plaintext' && file.fsPath.match(/\.(exe|dll|bin|jpg|png|gif|pdf|zip|tar|gz)$/i)) {
+	                        continue;
+	                    }
+
+	                    const text = document.getText();
+	                    const highlights = getHighlights(context, document);
+	                    const lines = text.split('\n');
+	                    let fileMatches = 0;
+	                    let fileLines = 0;
+
+	                    // Use regex to find all matches (like VS Code's search does)
+	                    const regex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+	                    
+	                    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+	                        const line = lines[lineIndex];
+	                        const matches = line.match(regex);
+	                        if (matches) {
+	                            totalMatches += matches.length;
+	                            // Only add if not already highlighted
+	                            if (!highlights.some(h => h.line === lineIndex)) {
+	                                highlights.push({ line: lineIndex, color });
+	                                fileLines++;
+	                                totalLines++;
+	                            }
+	                            fileMatches += matches.length;
+	                        }
+	                    }
+
+	                    if (fileLines > 0) {
+	                        setHighlights(context, document, highlights);
+	                        filesProcessed++;
+	                        
+	                        // Update decorations if this file is currently open
+	                        const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === document.uri.toString());
+	                        if (editor) {
+	                            updateDecorations(editor, context);
+	                        }
+	                    }
+	                } catch (error) {
+	                    // Skip files that can't be read
+	                    console.warn(`Could not process file: ${file.fsPath}`, error);
+	                }
+	            }
+	        });
+
+	        tryPostHighlights();
+	        
+	        if (totalLines === 0 && totalMatches === 0) {
+	            vscode.window.showInformationMessage(`No matches found for "${searchTerm}" in workspace`);
+	        } else if (totalLines === 0) {
+	            vscode.window.showInformationMessage(`Found ${totalMatches} matches for "${searchTerm}", but all matching lines are already highlighted`);
+	        } else {
+	            const matchLabel = totalMatches !== totalLines ? ` (${totalMatches} total matches)` : '';
+	            vscode.window.showInformationMessage(`Highlighted ${totalLines} lines containing "${searchTerm}" across ${filesProcessed} files${matchLabel}`);
+	        }
+	    })
+	);
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.clearAllHighlightsCurrentFile', async () => {
+	        const editor = vscode.window.activeTextEditor;
+	        if (!editor) {
+	            vscode.window.showWarningMessage('No active editor');
+	            return;
+	        }
+
+	        const highlights = getHighlights(context, editor.document);
+	        if (highlights.length === 0) {
+	            vscode.window.showInformationMessage('No highlights to clear in current file');
+	            return;
+	        }
+
+	        const fileName = vscode.workspace.asRelativePath(editor.document.uri);
+	        const confirmation = await vscode.window.showInputBox({
+	            prompt: `Type "yes" to clear ALL ${highlights.length} highlights from ${fileName}`,
+	            placeHolder: 'Type "yes" to confirm',
+	            validateInput: (value) => {
+	                if (value.toLowerCase() !== 'yes') {
+	                    return 'Please type "yes" to confirm deletion';
+	                }
+	                return null;
+	            }
+	        });
+
+	        if (confirmation?.toLowerCase() !== 'yes') {
+	            vscode.window.showInformationMessage('Clear operation cancelled');
+	            return;
+	        }
+
+	        // Clear all highlights for this file
+	        setHighlights(context, editor.document, []);
+	        updateDecorations(editor, context);
+	        tryPostHighlights();
+	        vscode.window.showInformationMessage(`Cleared ${highlights.length} highlights from ${fileName}`);
+	    })
+	);
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.clearAllHighlightsWorkspace', async () => {
+	        const allHighlights = getAllHighlights(context);
+	        const fileCount = Object.keys(allHighlights).length;
+	        
+	        if (fileCount === 0) {
+	            vscode.window.showInformationMessage('No highlights to clear in workspace');
+	            return;
+	        }
+
+	        // Count total highlights across all files
+	        let totalHighlights = 0;
+	        for (const highlights of Object.values(allHighlights)) {
+	            totalHighlights += highlights.length;
+	        }
+
+	        const confirmation = await vscode.window.showInputBox({
+	            prompt: `⚠️ Type "yes" to PERMANENTLY DELETE ALL ${totalHighlights} highlights from ${fileCount} files in the entire workspace`,
+	            placeHolder: 'Type "yes" to confirm this DESTRUCTIVE action',
+	            validateInput: (value) => {
+	                if (value.toLowerCase() !== 'yes') {
+	                    return 'Please type "yes" to confirm deletion of ALL highlights';
+	                }
+	                return null;
+	            }
+	        });
+
+	        if (confirmation?.toLowerCase() !== 'yes') {
+	            vscode.window.showInformationMessage('Workspace clear operation cancelled');
+	            return;
+	        }
+
+	        // Clear everything
+	        context.workspaceState.update(HIGHLIGHT_KEY, {});
+	        context.workspaceState.update(BLOCK_NAMES_KEY, {});
+	        
+	        // Update all visible editors
+	        vscode.window.visibleTextEditors.forEach(editor => {
+	            updateDecorations(editor, context);
+	        });
+	        
+	        tryPostHighlights();
+	        vscode.window.showInformationMessage(`🧹 Cleared ${totalHighlights} highlights from ${fileCount} files in workspace`);
+	    })
+	);
+
 	// --- Webview Sidebar Provider ---
 	context.subscriptions.push(
 	    vscode.window.registerWebviewViewProvider('line-highlighter.sidebar', {
@@ -449,6 +687,14 @@ export function activate(context: vscode.ExtensionContext) {
 	                        vscode.window.showErrorMessage('Failed to copy block from file');
 	                        console.error('Copy block error:', error);
 	                    }
+	                } else if (msg.type === 'highlightCurrentSearch') {
+	                    vscode.commands.executeCommand('line-highlighter.highlightCurrentSearchResults');
+	                } else if (msg.type === 'highlightGlobalSearch') {
+	                    vscode.commands.executeCommand('line-highlighter.highlightGlobalSearchResults');
+	                } else if (msg.type === 'clearCurrentFile') {
+	                    vscode.commands.executeCommand('line-highlighter.clearAllHighlightsCurrentFile');
+	                } else if (msg.type === 'clearWorkspace') {
+	                    vscode.commands.executeCommand('line-highlighter.clearAllHighlightsWorkspace');
 	                }
 	            });
 	            vscode.window.onDidChangeActiveTextEditor(() => tryPostHighlights());
@@ -473,6 +719,16 @@ export function activate(context: vscode.ExtensionContext) {
 	        '<button onclick="vscode.postMessage({ type: \'copyByColor\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy by Color</button>',
 	        '<button onclick="vscode.postMessage({ type: \'copyCurrentFile\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy Current File</button>',
 	        '<button onclick="vscode.postMessage({ type: \'copyAllFiles\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy All Files</button>',
+	        '</div>',
+	        '<h3>Search & Highlight</h3>',
+	        '<div style="margin-bottom:10px;">',
+	        '<button onclick="vscode.postMessage({ type: \'highlightCurrentSearch\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Highlight Find Results</button>',
+	        '<button onclick="vscode.postMessage({ type: \'highlightGlobalSearch\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Highlight Search Results</button>',
+	        '</div>',
+	        '<h3>Clear Highlights</h3>',
+	        '<div style="margin-bottom:10px;">',
+	        '<button onclick="vscode.postMessage({ type: \'clearCurrentFile\' })" style="margin:2px;padding:4px 8px;font-size:12px;background-color:#ff6b6b;color:white;border:none;">Clear Current File</button>',
+	        '<button onclick="vscode.postMessage({ type: \'clearWorkspace\' })" style="margin:2px;padding:4px 8px;font-size:12px;background-color:#dc3545;color:white;border:none;">🧹 NUKE ALL</button>',
 	        '</div>',
 	        '<h3>Highlighted Blocks (Current File)</h3>',
 	        '<ul id="blocks"></ul>',

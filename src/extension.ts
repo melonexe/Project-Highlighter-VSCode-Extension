@@ -111,6 +111,69 @@ export function activate(context: vscode.ExtensionContext) {
 	    });
 	}
 
+	// Helper to flash highlight a block with opposite color and smooth brightness ramp
+	async function flashHighlightBlock(editor: vscode.TextEditor, blockLines: number[], originalColor: string) {
+	    // Calculate opposite color
+	    const getOppositeColor = (rgba: string): string => {
+	        const match = rgba.match(/rgba?\((\d+), ?(\d+), ?(\d+)(?:, ?([\d.]+))?\)/);
+	        if (!match) return 'rgba(255, 255, 255, 0.8)'; // fallback to white
+	        const [_, r, g, b] = match;
+	        const oppR = 255 - parseInt(r);
+	        const oppG = 255 - parseInt(g);
+	        const oppB = 255 - parseInt(b);
+	        return `rgba(${oppR}, ${oppG}, ${oppB}, 0.8)`;
+	    };
+
+	    const oppositeColor = getOppositeColor(originalColor);
+	    const flashDecorationType = vscode.window.createTextEditorDecorationType({
+	        backgroundColor: oppositeColor,
+	        isWholeLine: true
+	    });
+
+	    const ranges = blockLines.map(line => 
+	        new vscode.Range(line, 0, line, editor.document.lineAt(line).text.length)
+	    );
+
+	    // Flash 2 times with ultra-smooth brightness ramp
+	    for (let flash = 0; flash < 2; flash++) {
+	        // Fade in (0 to max opacity over 300ms with 20 steps)
+	        for (let step = 0; step <= 20; step++) {
+	            const opacity = (step / 20) * 0.8; // Max opacity of 0.8
+	            const currentColor = oppositeColor.replace(/[\d.]+\)$/, `${opacity})`);
+	            
+	            // Update decoration type with current opacity
+	            flashDecorationType.dispose();
+	            const currentDecorationType = vscode.window.createTextEditorDecorationType({
+	                backgroundColor: currentColor,
+	                isWholeLine: true
+	            });
+	            
+	            editor.setDecorations(currentDecorationType, ranges);
+	            await new Promise(resolve => setTimeout(resolve, 15)); // 15ms per step = 300ms total
+	            currentDecorationType.dispose();
+	        }
+	        
+	        // Fade out (max opacity to 0 over 300ms with 20 steps)
+	        for (let step = 20; step >= 0; step--) {
+	            const opacity = (step / 20) * 0.8;
+	            const currentColor = oppositeColor.replace(/[\d.]+\)$/, `${opacity})`);
+	            
+	            const currentDecorationType = vscode.window.createTextEditorDecorationType({
+	                backgroundColor: currentColor,
+	                isWholeLine: true
+	            });
+	            
+	            editor.setDecorations(currentDecorationType, ranges);
+	            await new Promise(resolve => setTimeout(resolve, 15)); // 15ms per step = 300ms total
+	            currentDecorationType.dispose();
+	        }
+	    }
+
+	    // Dispose the flash decoration type and restore original decorations
+	    flashDecorationType.dispose();
+	    updateDecorations(editor, context);
+	}
+
 	// Update decorations to use color with current opacity
 	function updateDecorations(editor: vscode.TextEditor, context: vscode.ExtensionContext) {
 	    const highlights = getHighlights(context, editor.document);
@@ -265,6 +328,86 @@ export function activate(context: vscode.ExtensionContext) {
 	    return lines.join('\n');
 	}
 
+	// Copy functionality for markdown format
+	async function copyHighlightedLinesAsMarkdown(highlights: { line: number, color: string }[], document: vscode.TextDocument, filePath: string): Promise<string> {
+	    const lines: string[] = [];
+	    
+	    // Add file path as heading
+	    lines.push(`## ${filePath}`);
+	    lines.push(''); // Empty line after heading
+	    
+	    // Sort highlights by line number and group consecutive lines
+	    const sortedHighlights = highlights.sort((a, b) => a.line - b.line);
+	    const blocks: { lines: number[], color: string }[] = [];
+	    
+	    let currentBlock: { lines: number[], color: string } | null = null;
+	    for (const highlight of sortedHighlights) {
+	        if (!currentBlock || highlight.line !== currentBlock.lines[currentBlock.lines.length - 1] + 1 || highlight.color !== currentBlock.color) {
+	            if (currentBlock) blocks.push(currentBlock);
+	            currentBlock = { lines: [highlight.line], color: highlight.color };
+	        } else {
+	            currentBlock.lines.push(highlight.line);
+	        }
+	    }
+	    if (currentBlock) blocks.push(currentBlock);
+	    
+	    // Process each block
+	    for (let i = 0; i < blocks.length; i++) {
+	        const block = blocks[i];
+	        const blockLines: string[] = [];
+	        
+	        for (const lineNum of block.lines) {
+	            try {
+	                const lineText = document.lineAt(lineNum).text;
+	                blockLines.push(lineText);
+	            } catch (error) {
+	                console.warn(`Line ${lineNum} not found in document`);
+	            }
+	        }
+	        
+	        if (blockLines.length > 0) {
+	            // Detect language from file extension
+	            const fileExtension = document.fileName.split('.').pop()?.toLowerCase() || '';
+	            const languageMap: { [key: string]: string } = {
+	                'ts': 'typescript',
+	                'js': 'javascript',
+	                'py': 'python',
+	                'java': 'java',
+	                'cpp': 'cpp',
+	                'c': 'c',
+	                'cs': 'csharp',
+	                'php': 'php',
+	                'rb': 'ruby',
+	                'go': 'go',
+	                'rs': 'rust',
+	                'sh': 'bash',
+	                'ps1': 'powershell',
+	                'sql': 'sql',
+	                'html': 'html',
+	                'css': 'css',
+	                'scss': 'scss',
+	                'json': 'json',
+	                'xml': 'xml',
+	                'yaml': 'yaml',
+	                'yml': 'yaml',
+	                'md': 'markdown'
+	            };
+	            const language = languageMap[fileExtension] || '';
+	            
+	            lines.push(`\`\`\`${language}`);
+	            lines.push(...blockLines);
+	            lines.push('```');
+	            
+	            // Add spacing between blocks (but not after the last one)
+	            if (i < blocks.length - 1) {
+	                lines.push('');
+	            }
+	        }
+	    }
+	    
+	    return lines.join('\n');
+	}
+
 	context.subscriptions.push(
 	    vscode.commands.registerCommand('line-highlighter.copyHighlightsByColor', async () => {
 	        const editor = vscode.window.activeTextEditor;
@@ -357,6 +500,44 @@ export function activate(context: vscode.ExtensionContext) {
 	        const finalContent = contentParts.join('\n\n'); // Double newline to separate files
 	        await vscode.env.clipboard.writeText(finalContent);
 	        vscode.window.showInformationMessage(`Copied ${totalLines} highlighted lines from ${contentParts.length} files`);
+	    })
+	);
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.copyHighlightsAllFilesMarkdown', async () => {
+	        const allHighlights = getAllHighlights(context);
+	        
+	        if (Object.keys(allHighlights).length === 0) {
+	            vscode.window.showInformationMessage('No highlighted lines found in any files');
+	            return;
+	        }
+
+	        const contentParts: string[] = [];
+	        let totalLines = 0;
+
+	        for (const [fileUri, highlights] of Object.entries(allHighlights)) {
+	            if (highlights.length === 0) continue;
+
+	            try {
+	                const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
+	                const fileName = vscode.workspace.asRelativePath(document.uri);
+	                
+	                const fileContent = await copyHighlightedLinesAsMarkdown(highlights, document, fileName);
+	                contentParts.push(fileContent);
+	                totalLines += highlights.length;
+	            } catch (error) {
+	                console.warn(`Failed to open document: ${fileUri}`, error);
+	            }
+	        }
+
+	        if (contentParts.length === 0) {
+	            vscode.window.showInformationMessage('No valid highlighted lines found');
+	            return;
+	        }
+
+	        const finalContent = contentParts.join('\n\n'); // Double newline to separate files
+	        await vscode.env.clipboard.writeText(finalContent);
+	        vscode.window.showInformationMessage(`Copied ${totalLines} highlighted lines from ${contentParts.length} files as Markdown`);
 	    })
 	);
 
@@ -625,7 +806,14 @@ export function activate(context: vscode.ExtensionContext) {
 	                    if (!editor) return;
 	                    const start = msg.block[0];
 	                    const end = msg.block[msg.block.length - 1];
-	                    editor.revealRange(new vscode.Range(start, 0, end, editor.document.lineAt(end).text.length));
+	                    
+	                    // Center the range in the view
+	                    const range = new vscode.Range(start, 0, end, editor.document.lineAt(end).text.length);
+	                    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+	                    
+	                    // Flash with opposite color of the block
+	                    const blockColor = msg.color || getHighlightColor();
+	                    await flashHighlightBlock(editor, msg.block, blockColor);
 	                } else if (msg.type === 'removeBlock') {
 	                    const editor = vscode.window.activeTextEditor;
 	                    if (!editor) return;
@@ -640,7 +828,14 @@ export function activate(context: vscode.ExtensionContext) {
 	                    const editor = await vscode.window.showTextDocument(doc);
 	                    const start = msg.block[0];
 	                    const end = msg.block[msg.block.length - 1];
-	                    editor.revealRange(new vscode.Range(start, 0, end, doc.lineAt(end).text.length));
+	                    
+	                    // Center the range in the view
+	                    const range = new vscode.Range(start,  0, end, doc.lineAt(end).text.length);
+	                    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+	                    
+	                    // Flash with opposite color of the block
+	                    const blockColor = msg.color || getHighlightColor();
+	                    await flashHighlightBlock(editor, msg.block, blockColor);
 	                } else if (msg.type === 'removeBlockGlobal') {
 	                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(msg.file));
 	                    let highlights = getHighlights(context, doc);
@@ -657,6 +852,8 @@ export function activate(context: vscode.ExtensionContext) {
 	                    vscode.commands.executeCommand('line-highlighter.copyHighlightsCurrentFile');
 	                } else if (msg.type === 'copyAllFiles') {
 	                    vscode.commands.executeCommand('line-highlighter.copyHighlightsAllFiles');
+	                } else if (msg.type === 'copyAllFilesMarkdown') {
+	                    vscode.commands.executeCommand('line-highlighter.copyHighlightsAllFilesMarkdown');
 	                } else if (msg.type === 'copyBlock') {
 	                    const editor = vscode.window.activeTextEditor;
 	                    if (!editor) return;
@@ -719,6 +916,7 @@ export function activate(context: vscode.ExtensionContext) {
 	        '<button onclick="vscode.postMessage({ type: \'copyByColor\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy by Color</button>',
 	        '<button onclick="vscode.postMessage({ type: \'copyCurrentFile\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy Current File</button>',
 	        '<button onclick="vscode.postMessage({ type: \'copyAllFiles\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy All Files</button>',
+	        '<button onclick="vscode.postMessage({ type: \'copyAllFilesMarkdown\' })" style="margin:2px;padding:4px 8px;font-size:12px;background-color:#28a745;color:white;border:none;">📋 Copy as Markdown</button>',
 	        '</div>',
 	        '<h3>Search & Highlight</h3>',
 	        '<div style="margin-bottom:10px;">',

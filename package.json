@@ -35,6 +35,10 @@
         "title": "Copy All Highlighted Lines (All Files)"
       },
       {
+        "command": "line-highlighter.copyHighlightsAllFilesMarkdown",
+        "title": "Copy All Highlighted Lines as Markdown"
+      },
+      {
         "command": "line-highlighter.highlightCurrentSearchResults",
         "title": "Highlight Current Search Results"
       },

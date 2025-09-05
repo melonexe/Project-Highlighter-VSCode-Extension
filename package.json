@@ -2,7 +2,7 @@
   "name": "project-highlighter",
   "displayName": "Project Highlighter",
   "description": "Highlight lines in the editor with persistence using the Decoration API. Manually highlight selected lines or automatically highlight all occurrences of searched text. Shows a sidebar with highlighting options, copy functionality, and management tools for the entire workspace.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "icon": "resources/line-highlighter-icon.png",
   "engines": {
     "vscode": "^1.101.0"

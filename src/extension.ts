@@ -69,15 +69,41 @@ export function activate(context: vscode.ExtensionContext) {
 	    return document.uri.toString();
 	}
 
-	// Refactored: highlights are now stored as { line: number, color: string }[] per file
-	function getHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument): { line: number, color: string }[] {
-	    const all = context.workspaceState.get<{ [key: string]: { line: number, color: string }[] }>(HIGHLIGHT_KEY, {});
-	    return all[getFileKey(document)] || [];
+	// Highlight interface with timestamp
+	interface Highlight {
+		line: number;
+		color: string;
+		timestamp?: string;
 	}
-	function setHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument, highlights: { line: number, color: string }[]) {
-	    const all = context.workspaceState.get<{ [key: string]: { line: number, color: string }[] }>(HIGHLIGHT_KEY, {});
-	    all[getFileKey(document)] = highlights;
-	    context.workspaceState.update(HIGHLIGHT_KEY, all);
+
+	// Extract timestamp from a line of text
+	function extractTimestamp(text: string): string | undefined {
+		// Common timestamp patterns
+		const patterns = [
+			/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/, // ISO format
+			/\b\d{2}[-/]\d{2}[-/]\d{4}\s\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/, // DD/MM/YYYY HH:MM:SS
+			/\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/, // HH:MM:SS
+		];
+
+		for (const pattern of patterns) {
+			const match = text.match(pattern);
+			if (match) {
+				return match[0];
+			}
+		}
+		return undefined;
+	}
+
+	// Refactored: highlights are now stored as Highlight[] per file
+	function getHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument): Highlight[] {
+		const all = context.workspaceState.get<{ [key: string]: Highlight[] }>(HIGHLIGHT_KEY, {});
+		return all[getFileKey(document)] || [];
+	}
+
+	function setHighlights(context: vscode.ExtensionContext, document: vscode.TextDocument, highlights: Highlight[]) {
+		const all = context.workspaceState.get<{ [key: string]: Highlight[] }>(HIGHLIGHT_KEY, {});
+		all[getFileKey(document)] = highlights;
+		context.workspaceState.update(HIGHLIGHT_KEY, all);
 	}
 
 	function updateAllDecorations() {
@@ -233,38 +259,110 @@ export function activate(context: vscode.ExtensionContext) {
 	    if (currentWebviewView) {
 	        const editor = vscode.window.activeTextEditor;
 	        if (!editor) return;
-	        const highlights = getHighlights(context, editor.document).sort((a, b) => a.line - b.line || a.color.localeCompare(b.color));
+
+	        // Function to get timestamp for a block of highlights
+	        const getBlockTimestamp = (doc: vscode.TextDocument, lines: number[]): string | undefined => {
+	            for (const line of lines) {
+	                try {
+	                    const lineText = doc.lineAt(line).text;
+	                    const timestamp = extractTimestamp(lineText);
+	                    if (timestamp) {
+	                        return timestamp;
+	                    }
+	                } catch (error) {
+	                    console.warn(`Error reading line ${line}:`, error);
+	                }
+	            }
+	            return undefined;
+	        };
+
+	        const highlights = getHighlights(context, editor.document)
+	            .sort((a, b) => a.line - b.line || a.color.localeCompare(b.color));
+
 	        // Group consecutive lines with the same color into blocks
-	        const blocks: { lines: number[], color: string }[] = [];
-	        let block: { lines: number[], color: string } | null = null;
+	        const blocks: { lines: number[], color: string, timestamp?: string }[] = [];
+	        let block: { lines: number[], color: string, timestamp?: string } | null = null;
 	        for (let i = 0; i < highlights.length; i++) {
 	            const h = highlights[i];
 	            if (!block || h.line !== block.lines[block.lines.length - 1] + 1 || h.color !== block.color) {
 	                if (block) blocks.push(block);
-	                block = { lines: [h.line], color: h.color };
+	                block = { lines: [h.line], color: h.color, timestamp: h.timestamp };
 	            } else {
 	                block.lines.push(h.line);
+	                // Use the first valid timestamp in the block
+	                if (!block.timestamp && h.timestamp) {
+	                    block.timestamp = h.timestamp;
+	                }
 	            }
 	        }
 	        if (block) blocks.push(block);
+
+	        // Sort blocks by timestamp if available
+	        blocks.sort((a, b) => {
+	            if (!a.timestamp && !b.timestamp) return 0;
+	            if (!a.timestamp) return 1;
+	            if (!b.timestamp) return -1;
+	            return a.timestamp.localeCompare(b.timestamp);
+	        });
+
 	        // All blocks in all files
 	        const allHighlights = getAllHighlights(context);
 	        const blockNames = getBlockNames(context);
-	        const allBlocks: Array<{ file: string, fileName: string, block: number[], color: string, name?: string }> = [];
+	        const allBlocks: Array<{ file: string, fileName: string, block: number[], color: string, name?: string, timestamp?: string }> = [];
+
 	        for (const file in allHighlights) {
-	            const fileHighlights = (allHighlights[file] || []).sort((a, b) => a.line - b.line || a.color.localeCompare(b.color));
-	            let b: { lines: number[], color: string } | null = null;
+	            const fileHighlights = (allHighlights[file] || [])
+	                .sort((a, b) => a.line - b.line || a.color.localeCompare(b.color));
+	            let b: { lines: number[], color: string, timestamp?: string } | null = null;
+
+	            // Get document for timestamp extraction
+	            let doc: vscode.TextDocument | undefined;
+	            try {
+	                doc = vscode.workspace.textDocuments.find(d => d.uri.toString() === file);
+	            } catch (error) {
+	                console.warn(`Error accessing document ${file}:`, error);
+	            }
+
 	            for (let i = 0; i < fileHighlights.length; i++) {
 	                const h = fileHighlights[i];
 	                if (!b || h.line !== b.lines[b.lines.length - 1] + 1 || h.color !== b.color) {
-	                    if (b) allBlocks.push({ file, fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file, block: [...b.lines], color: b.color, name: blockNames[file]?.[blockKeyFromLines(b.lines)] });
+	                    if (b) {
+	                        const timestamp = doc ? getBlockTimestamp(doc, b.lines) : undefined;
+	                        allBlocks.push({
+	                            file,
+	                            fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file,
+	                            block: [...b.lines],
+	                            color: b.color,
+	                            name: blockNames[file]?.[blockKeyFromLines(b.lines)],
+	                            timestamp
+	                        });
+	                    }
 	                    b = { lines: [h.line], color: h.color };
 	                } else {
 	                    b.lines.push(h.line);
 	                }
 	            }
-	            if (b) allBlocks.push({ file, fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file, block: [...b.lines], color: b.color, name: blockNames[file]?.[blockKeyFromLines(b.lines)] });
+	            if (b) {
+	                const timestamp = doc ? getBlockTimestamp(doc, b.lines) : undefined;
+	                allBlocks.push({
+	                    file,
+	                    fileName: vscode.Uri.parse(file).fsPath.split(/[\\/]/).pop() || file,
+	                    block: [...b.lines],
+	                    color: b.color,
+	                    name: blockNames[file]?.[blockKeyFromLines(b.lines)],
+	                    timestamp
+	                });
+	            }
 	        }
+
+	        // Sort all blocks by timestamp if available
+	        allBlocks.sort((a, b) => {
+	            if (!a.timestamp && !b.timestamp) return 0;
+	            if (!a.timestamp) return 1;
+	            if (!b.timestamp) return -1;
+	            return a.timestamp.localeCompare(b.timestamp);
+	        });
+
 	        currentWebviewView.webview.postMessage({ type: 'highlightBlocks', blocks, allBlocks });
 	    }
 	}
@@ -280,7 +378,9 @@ export function activate(context: vscode.ExtensionContext) {
 	        const color = getHighlightColor();
 	        for (let line = start; line <= end; line++) {
 	            if (!highlights.some(h => h.line === line)) {
-	                highlights.push({ line, color });
+	                const lineText = editor.document.lineAt(line).text;
+	                const timestamp = extractTimestamp(lineText);
+	                highlights.push({ line, color, timestamp });
 	            }
 	        }
 	        setHighlights(context, editor.document, highlights);
@@ -333,7 +433,7 @@ export function activate(context: vscode.ExtensionContext) {
 	    const lines: string[] = [];
 	    
 	    // Add file path as heading
-	    lines.push(`## ${filePath}`);
+	    lines.push(`#### ${filePath}`);
 	    lines.push(''); // Empty line after heading
 	    
 	    // Sort highlights by line number and group consecutive lines
@@ -951,8 +1051,9 @@ export function activate(context: vscode.ExtensionContext) {
 	        '    ul.innerHTML = "";',
 	        '    blocks.forEach(function(block) {',
 	        '      var label = block.lines.length === 1 ? "Line " + (block.lines[0] + 1) : "Lines " + (block.lines[0] + 1) + "-" + (block.lines[block.lines.length - 1] + 1);',
+	        '      var timestamp = block.timestamp ? ` (${block.timestamp})` : "";',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<span style=\'cursor:pointer;color:${block.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
+	        '      li.innerHTML = `<span style=\'cursor:pointer;color:${block.color};font-weight:bold;\' class=\'reveal\'>${label}</span><span style=\'color:#5bc0de;font-size:0.9em;margin-left:4px;\'>${timestamp}</span> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
 	        '      li.style.background = "";',
 	        '      li.style.borderRadius = "4px";',
 	        '      li.style.marginBottom = "2px";',
@@ -968,8 +1069,9 @@ export function activate(context: vscode.ExtensionContext) {
 	        '    allBlocks.forEach(function(entry, idx) {',
 	        '      var label = entry.block.length === 1 ? "Line " + (entry.block[0] + 1) : "Lines " + (entry.block[0] + 1) + "-" + (entry.block[entry.block.length - 1] + 1);',
 	        '      var name = entry.name || "";',
+	        '      var timestamp = entry.timestamp ? ` (${entry.timestamp})` : "";',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:${entry.color};font-weight:bold;\' class=\'reveal\'>${label}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
+	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:${entry.color};font-weight:bold;\' class=\'reveal\'>${label}</span><span style=\'color:#5bc0de;font-size:0.9em;margin-left:4px;\'>${timestamp}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
 	        '      li.style.background = "";',
 	        '      li.style.borderRadius = "4px";',
 	        '      li.style.marginBottom = "2px";',

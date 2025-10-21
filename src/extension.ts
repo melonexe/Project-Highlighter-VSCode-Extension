@@ -232,6 +232,108 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(disposable);
+
+	// Output channel for SSRC stats
+	const ssrcOutput = vscode.window.createOutputChannel('SSRC Stats');
+
+	// Helper: parse syncBlockTS and rtpTimestamp from a log line
+	function parseRtpLine(line: string): { syncBlockTS?: number, rtpTimestamp?: number, streamName?: string } {
+		const result: { syncBlockTS?: number, rtpTimestamp?: number, streamName?: string } = {};
+		try {
+			const syncMatch = line.match(/syncBlockTS:\s*(\d+)/i);
+			const rtpMatch = line.match(/rtpTimestamp:\s*(\d+)/i);
+			const streamMatch = line.match(/stream:([^\s,]+)/i);
+			if (syncMatch) result.syncBlockTS = parseInt(syncMatch[1], 10);
+			if (rtpMatch) result.rtpTimestamp = parseInt(rtpMatch[1], 10);
+			if (streamMatch) result.streamName = streamMatch[1];
+		} catch (e) {
+			// ignore
+		}
+		return result;
+	}
+
+	// Helper: perform the calculations and return a report string
+	function calculateSsrcReport(opts: { fileName: string, streamName?: string, syncBlockTS: number, rtpTimestamp: number, sampleRate: number, packetTimeUs: number }) {
+		const { fileName, streamName, syncBlockTS, rtpTimestamp, sampleRate, packetTimeUs } = opts;
+	// Assumptions:
+	// - rtpTimestamp and syncBlockTS are sample counters (wrap-around not handled here)
+	// Note: compute rtpTimestamp - syncBlockTS per user request
+	const sampleDiff = rtpTimestamp - syncBlockTS;
+		const packetsPerSecond = 1_000_000 / packetTimeUs; // e.g., 125us -> 8000pps; 1000us -> 1000pps
+		const samplesPerPacket = sampleRate / packetsPerSecond;
+		const packetDiff = sampleDiff / samplesPerPacket;
+		const seconds = sampleDiff / sampleRate;
+		const milliseconds = seconds * 1000;
+
+	const headerName = streamName || fileName || 'unknown';
+	const lines: string[] = [];
+	// Add EARLY/LATE/ON TIME label based on signed sample difference
+	// Negative sampleDiff => EARLY (packet timestamp < arrival time)
+	const timingLabel = sampleDiff < 0 ? 'EARLY' : (sampleDiff > 0 ? 'LATE' : 'ON TIME');
+	lines.push(`***** ${timingLabel} *****`);
+	lines.push('');
+	// Keep signed differences (don't take absolute) so negative values remain negative
+	const signedSamples = sampleDiff;
+	const signedPackets = packetDiff;
+	const signedSeconds = seconds;
+	const signedMilliseconds = milliseconds;
+		lines.push(`Stream name "${headerName}"`);
+		lines.push('');
+		lines.push(`syncBlockTS: ${syncBlockTS}`);
+		lines.push(`rtpTimestamp: ${rtpTimestamp}`);
+		lines.push('');
+	lines.push(`Difference in samples: ${signedSamples} samples`);
+	lines.push(`Difference in packets: ${signedPackets.toFixed(3)} packets`);
+	lines.push(`Difference in seconds: ${signedSeconds.toFixed(6)} s`);
+	lines.push(`Difference in milliseconds: ${signedMilliseconds.toFixed(3)} ms`);
+		lines.push('');
+		lines.push(`Sample rate: ${sampleRate} Hz`);
+		lines.push(`Packet time: ${packetTimeUs} μs (${packetsPerSecond.toFixed(0)} packets/s)`);
+
+		return lines.join('\n');
+	}
+
+	// Register calculate SSRC stats command
+	context.subscriptions.push(vscode.commands.registerCommand('line-highlighter.calculateSsrcStats', async () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showWarningMessage('No active editor');
+			return;
+		}
+
+		const selection = editor.selection;
+		const lineText = editor.document.lineAt(selection.active.line).text;
+		const parsed = parseRtpLine(lineText);
+
+		if (parsed.syncBlockTS === undefined || parsed.rtpTimestamp === undefined) {
+			vscode.window.showErrorMessage('Could not find syncBlockTS and/or rtpTimestamp in the selected line');
+			return;
+		}
+
+		// Prompt for sample rate
+		const sampleRatePick = await vscode.window.showQuickPick([
+			{ label: '48000', description: '48 kHz' },
+			{ label: '96000', description: '96 kHz' }
+		], { placeHolder: 'Select sample rate' });
+		if (!sampleRatePick) return;
+		const sampleRate = parseInt(sampleRatePick.label, 10);
+
+		// Prompt for packet time
+		const packetTimePick = await vscode.window.showQuickPick([
+			{ label: '125', description: '125 μs' },
+			{ label: '1000', description: '1000 μs' }
+		], { placeHolder: 'Select packet time (microseconds)' });
+		if (!packetTimePick) return;
+		const packetTimeUs = parseInt(packetTimePick.label, 10);
+
+	const report = calculateSsrcReport({ fileName: vscode.workspace.asRelativePath(editor.document.uri), streamName: parsed.streamName, syncBlockTS: parsed.syncBlockTS, rtpTimestamp: parsed.rtpTimestamp, sampleRate, packetTimeUs });
+
+		// Show in Output channel and a quick info popup
+		ssrcOutput.clear();
+		ssrcOutput.appendLine(report);
+		ssrcOutput.show(true);
+		vscode.window.showInformationMessage('SSRC stats calculated — see "SSRC Stats" output channel');
+	}));
 	// Keep a reference to the current webviewView
 	let currentWebviewView: vscode.WebviewView | undefined;
 

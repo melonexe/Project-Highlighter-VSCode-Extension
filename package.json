@@ -54,6 +54,11 @@
         "command": "line-highlighter.clearAllHighlightsWorkspace",
         "title": "Clear All Highlights (Entire Workspace)"
       }
+      ,
+      {
+        "command": "line-highlighter.calculateSsrcStats",
+        "title": "Calculate SSRC stats"
+      }
     ],
     "keybindings": [
       {
@@ -93,6 +98,12 @@
           "submenu": "line-highlighter.copySubmenu",
           "when": "editorTextFocus",
           "group": "navigation@12"
+        }
+        ,
+        {
+          "command": "line-highlighter.calculateSsrcStats",
+          "when": "editorTextFocus",
+          "group": "navigation@13"
         }
       ],
       "line-highlighter.copySubmenu": [

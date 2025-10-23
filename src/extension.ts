@@ -1077,6 +1077,51 @@ export function activate(context: vscode.ExtensionContext) {
 	                } else if (msg.type === 'renameBlock') {
 	                    setBlockName(context, msg.file, blockKeyFromLines(msg.block), msg.name);
 	                    tryPostHighlights();
+					} else if (msg.type === 'changeBlockColor') {
+						// Change color for the given block in the current editor's document
+						const editor = vscode.window.activeTextEditor;
+						if (!editor) return;
+						const highlights = getHighlights(context, editor.document);
+						let changed = false;
+						for (const line of msg.block) {
+							const h = highlights.find(x => x.line === line);
+							if (h) {
+								h.color = msg.color;
+								// Update timestamp if available on the line
+								try { const txt = editor.document.lineAt(line).text; const ts = extractTimestamp(txt); if (ts) h.timestamp = ts; } catch (e) {}
+								changed = true;
+							}
+						}
+						if (changed) {
+							setHighlights(context, editor.document, highlights);
+							updateDecorations(editor, context);
+							tryPostHighlights();
+						}
+					} else if (msg.type === 'changeBlockColorGlobal') {
+						// Change color for the given block in another file
+						try {
+							const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(msg.file));
+							const highlights = getHighlights(context, doc);
+							let changed = false;
+							for (const line of msg.block) {
+								const h = highlights.find(x => x.line === line);
+								if (h) {
+									h.color = msg.color;
+									// Update timestamp if available in the document
+									try { const txt = doc.lineAt(line).text; const ts = extractTimestamp(txt); if (ts) h.timestamp = ts; } catch (e) {}
+									changed = true;
+								}
+							}
+							if (changed) {
+								setHighlights(context, doc, highlights);
+								// Update decorations if this file is open
+								const openEditor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === doc.uri.toString());
+								if (openEditor) updateDecorations(openEditor, context);
+								tryPostHighlights();
+							}
+						} catch (error) {
+							console.error('Failed to change block color global:', error);
+						}
 	                } else if (msg.type === 'copyByColor') {
 	                    vscode.commands.executeCommand('line-highlighter.copyHighlightsByColor');
 	                } else if (msg.type === 'copyCurrentFile') {
@@ -1167,7 +1212,48 @@ export function activate(context: vscode.ExtensionContext) {
 	        '<h3>All Highlighted Blocks</h3>',
 	        '<ul id="allBlocks"></ul>',
 	        '<script>',
-	        'const vscode = acquireVsCodeApi();',
+		'const vscode = acquireVsCodeApi();',
+		'const COLOR_VALUES = ["rgba(0, 204, 255, 0.49)", "rgba(255, 187, 0, 0.49)", "rgba(0, 255, 128, 0.49)", "rgba(255, 0, 0, 0.49)", "rgba(174, 0, 255, 0.49)"];',
+		'function showPaletteFor(block, file) {',
+		'  // remove existing palette',
+		'  const existing = document.getElementById("colorPalette");',
+		'  if (existing) existing.remove();',
+		'  const palette = document.createElement("div");',
+		'  palette.id = "colorPalette";',
+		'  palette.style.position = "fixed";',
+		'  palette.style.zIndex = "10000";',
+		'  palette.style.top = "40%";',
+		'  palette.style.left = "50%";',
+		'  palette.style.transform = "translate(-50%, -50%)";',
+		'  palette.style.padding = "8px";',
+		'  palette.style.border = "1px solid #ccc";',
+		'  palette.style.background = "#fff";',
+		'  palette.style.borderRadius = "6px";',
+		'  palette.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";',
+		'  COLOR_VALUES.forEach(function(c) {',
+		'    const btn = document.createElement("button");',
+		'    btn.style.width = "28px";',
+		'    btn.style.height = "28px";',
+		'    btn.style.margin = "4px";',
+		'    btn.style.border = "1px solid #888";',
+		'    btn.style.background = c;',
+		'    btn.onclick = function() {',
+		'      if (file) {',
+		'        vscode.postMessage({ type: "changeBlockColorGlobal", file: file, block: block, color: c });',
+		'      } else {',
+		'        vscode.postMessage({ type: "changeBlockColor", block: block, color: c });',
+		'      }',
+		'      palette.remove();',
+		'    };',
+		'    palette.appendChild(btn);',
+		'  });',
+		'  const cancel = document.createElement("button");',
+		'  cancel.textContent = "×";',
+		'  cancel.style.marginLeft = "8px";',
+		'  cancel.onclick = function() { palette.remove(); };',
+		'  palette.appendChild(cancel);',
+		'  document.body.appendChild(palette);',
+		'}',
 	        'window.addEventListener("DOMContentLoaded", function() {',
 	        '  vscode.postMessage({ type: "sidebarReady" });',
 	        '});',
@@ -1193,13 +1279,14 @@ export function activate(context: vscode.ExtensionContext) {
 	        '      var label = block.lines.length === 1 ? "Line " + (block.lines[0] + 1) : "Lines " + (block.lines[0] + 1) + "-" + (block.lines[block.lines.length - 1] + 1);',
 	        '      var timestamp = block.timestamp ? ` (${block.timestamp})` : "";',
 	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<span style=\'cursor:pointer;color:${block.color};font-weight:bold;\' class=\'reveal\'>${label}</span><span style=\'color:#5bc0de;font-size:0.9em;margin-left:4px;\'>${timestamp}</span> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
+		'      li.innerHTML = `<span style=\'cursor:pointer;color:${block.color};font-weight:bold;\' class=\'reveal\'>${label}</span><span style=\'color:#5bc0de;font-size:0.9em;margin-left:4px;\'>${timestamp}</span> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button> <button class=\'color\'>Color</button>`;',
 	        '      li.style.background = "";',
 	        '      li.style.borderRadius = "4px";',
 	        '      li.style.marginBottom = "2px";',
 	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlock", block: block.lines }); };',
 	        '      li.querySelector(".copy").onclick = function() { vscode.postMessage({ type: "copyBlock", block: block.lines, color: block.color }); };',
-	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlock", block: block.lines, color: block.color }); };',
+		'      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlock", block: block.lines, color: block.color }); };',
+		'      li.querySelector(".color").onclick = function() { showPaletteFor(block.lines); };',
 	        '      ul.appendChild(li);',
 	        '    });',
 	        '    // All blocks in all files',
@@ -1210,14 +1297,15 @@ export function activate(context: vscode.ExtensionContext) {
 	        '      var label = entry.block.length === 1 ? "Line " + (entry.block[0] + 1) : "Lines " + (entry.block[0] + 1) + "-" + (entry.block[entry.block.length - 1] + 1);',
 	        '      var name = entry.name || "";',
 	        '      var timestamp = entry.timestamp ? ` (${entry.timestamp})` : "";',
-	        '      var li = document.createElement("li");',
-	        '      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:${entry.color};font-weight:bold;\' class=\'reveal\'>${label}</span><span style=\'color:#5bc0de;font-size:0.9em;margin-left:4px;\'>${timestamp}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button>`;',
+		'      var li = document.createElement("li");',
+		'      li.innerHTML = `<b>${entry.fileName}</b>: <span style=\'cursor:pointer;color:${entry.color};font-weight:bold;\' class=\'reveal\'>${label}</span><span style=\'color:#5bc0de;font-size:0.9em;margin-left:4px;\'>${timestamp}</span> <input type=\'text\' class=\'blockName\' value=\'${name.replace(/\'/g, "&#39;").replace(/\"/g, "&quot;")}\' placeholder=\'(optional name)\' style=\'width:120px;margin-left:4px;\' /> <button class=\'copy\'>Copy</button> <button class=\'remove\'>Remove</button> <button class=\'color\'>Color</button>`;',
 	        '      li.style.background = "";',
 	        '      li.style.borderRadius = "4px";',
 	        '      li.style.marginBottom = "2px";',
 	        '      li.querySelector(".reveal").onclick = function() { vscode.postMessage({ type: "revealBlockGlobal", file: entry.file, block: entry.block }); };',
 	        '      li.querySelector(".copy").onclick = function() { vscode.postMessage({ type: "copyBlockGlobal", file: entry.file, block: entry.block, color: entry.color }); };',
-	        '      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlockGlobal", file: entry.file, block: entry.block, color: entry.color }); };',
+		'      li.querySelector(".remove").onclick = function() { vscode.postMessage({ type: "removeBlockGlobal", file: entry.file, block: entry.block, color: entry.color }); };',
+		'      li.querySelector(".color").onclick = function() { showPaletteFor(entry.block, entry.file); };',
 	        '      li.querySelector(".blockName").onchange = function(e) { vscode.postMessage({ type: "renameBlock", file: entry.file, block: entry.block, name: e.target.value }); };',
 	        '      allUl.appendChild(li);',
 	        '    });',

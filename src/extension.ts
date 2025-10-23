@@ -13,6 +13,9 @@ export function activate(context: vscode.ExtensionContext) {
 	// Key for storing highlights in workspaceState
 	const HIGHLIGHT_KEY = 'line-highlighter.highlights';
 
+	// Key for hiding highlights toggle
+	const HIDE_KEY = 'line-highlighter.hideHighlights';
+
 	// Store the selected color in workspaceState
 	const COLOR_KEY = 'line-highlighter.color';
 
@@ -111,6 +114,14 @@ export function activate(context: vscode.ExtensionContext) {
 	    vscode.window.visibleTextEditors.forEach(editor => updateDecorations(editor, context));
 	}
 
+	function getHideHighlights(context: vscode.ExtensionContext): boolean {
+		return context.workspaceState.get<boolean>(HIDE_KEY, false);
+	}
+
+	function setHideHighlights(context: vscode.ExtensionContext, hide: boolean) {
+		context.workspaceState.update(HIDE_KEY, hide);
+	}
+
 	// Helper to apply opacity to rgba color string
 	function withOpacity(rgba: string, opacity: number): string {
 	    const match = rgba.match(/rgba?\((\d+), ?(\d+), ?(\d+)(?:, ?([\d.]+))?\)/);
@@ -202,6 +213,15 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Update decorations to use color with current opacity
 	function updateDecorations(editor: vscode.TextEditor, context: vscode.ExtensionContext) {
+	    // If hide highlights is enabled, clear all decorations and return
+	    if (getHideHighlights(context)) {
+	        Object.keys(decorationTypes).forEach(k => {
+	            const deco = decorationTypes[k];
+	            if (deco) editor.setDecorations(deco, []);
+	        });
+	        return;
+	    }
+	
 	    const highlights = getHighlights(context, editor.document);
 	    const opacity = getOpacity();
 	    // Remove all decorations first
@@ -988,21 +1008,25 @@ export function activate(context: vscode.ExtensionContext) {
 	            currentWebviewView = webviewView;
 	            webviewView.onDidDispose(() => { currentWebviewView = undefined; });
 	            webviewView.webview.options = { enableScripts: true };
-	            webviewView.webview.html = getSidebarHtml(getHighlightColor());
+				webviewView.webview.html = getSidebarHtml(getHighlightColor(), getHideHighlights(context));
 	            tryPostHighlights();
 	            webviewView.webview.onDidReceiveMessage(async msg => {
 	                if (msg.type === 'sidebarReady') {
 	                    tryPostHighlights();
 	                } else if (msg.type === 'setColor') {
 	                    setHighlightColor(msg.color);
-	                    webviewView.webview.html = getSidebarHtml(msg.color);
+						webviewView.webview.html = getSidebarHtml(msg.color, getHideHighlights(context));
 	                    // tryPostHighlights will be called by sidebarReady after reload
 	                } else if (msg.type === 'setOpacity') {
 	                    setOpacity(msg.value);
 	                    updateAllDecorationTypes();
 	                    updateAllDecorations();
-	                    webviewView.webview.html = getSidebarHtml(getHighlightColor());
+						webviewView.webview.html = getSidebarHtml(getHighlightColor(), getHideHighlights(context));
 	                    // tryPostHighlights will be called by sidebarReady after reload
+					} else if (msg.type === 'setHide') {
+						setHideHighlights(context, !!msg.value);
+						updateAllDecorations();
+						webviewView.webview.html = getSidebarHtml(getHighlightColor(), getHideHighlights(context));
 	                } else if (msg.type === 'revealBlock') {
 	                    const editor = vscode.window.activeTextEditor;
 	                    if (!editor) return;
@@ -1102,14 +1126,17 @@ export function activate(context: vscode.ExtensionContext) {
 	    })
 	);
 
-	function getSidebarHtml(currentColor: string) {
-	    const opacity = getOpacity();
+	function getSidebarHtml(currentColor: string, hideHighlights: boolean) {
+		const opacity = getOpacity();
 	    // Color selection UI
 	    const colorOptions = HIGHLIGHT_COLORS.map(c =>
 	        `<button onclick="vscode.postMessage({ type: 'setColor', color: '${c.value}' })" style="width:28px;height:28px;margin:2px;border:${currentColor === c.value ? '2px solid #333' : '1px solid #ccc'};background:${c.value};cursor:pointer;" title="${c.name}"></button>`
 	    ).join('');
 	    return [
 	        '<html><body>',
+			'<div style="margin-bottom:10px;">',
+			`<label><input type=\'checkbox\' id=\'hideCheckbox\' ${hideHighlights ? 'checked' : ''} /> Hide highlights</label>`,
+			'</div>',
 	        '<h3>Highlight Color</h3>',
 	        `<div style="margin-bottom:10px;">Choose: ${colorOptions}</div>`,
 	        `<div style="margin-bottom:10px;">Opacity: <input id="opacitySlider" type="range" min="0.1" max="1" step="0.01" value="${opacity}" style="vertical-align:middle;width:120px;" /> <span id="opacityValue">${Math.round(opacity*100)}%</span></div>`,
@@ -1141,10 +1168,16 @@ export function activate(context: vscode.ExtensionContext) {
 	        '});',
 	        'const slider = document.getElementById("opacitySlider");',
 	        'const valSpan = document.getElementById("opacityValue");',
-	        'slider.oninput = function() {',
-	        '  valSpan.textContent = Math.round(slider.value*100) + "%";',
-	        '  vscode.postMessage({ type: "setOpacity", value: parseFloat(slider.value) });',
-	        '};',
+		'slider.oninput = function() {',
+		'  valSpan.textContent = Math.round(slider.value*100) + "%";',
+		'  vscode.postMessage({ type: "setOpacity", value: parseFloat(slider.value) });',
+		'};',
+		'const hideCheckbox = document.getElementById("hideCheckbox");',
+		'if (hideCheckbox) {',
+		'  hideCheckbox.onchange = function() {',
+		'    vscode.postMessage({ type: "setHide", value: hideCheckbox.checked });',
+		'  };',
+		'}',
 	        'window.addEventListener("message", function(event) {',
 	        '  if (event.data.type === "highlightBlocks") {',
 	        '    // Current file blocks',
@@ -1223,6 +1256,16 @@ export function activate(context: vscode.ExtensionContext) {
     // Ensure correct opacity and decorations on activation
     updateAllDecorationTypes();
     updateAllDecorations();
+
+	// Command to toggle hide highlights (also bound to Ctrl+Alt+H)
+	context.subscriptions.push(vscode.commands.registerCommand('line-highlighter.toggleHideHighlights', async () => {
+		const current = getHideHighlights(context);
+		setHideHighlights(context, !current);
+		updateAllDecorations();
+		if (currentWebviewView) {
+			currentWebviewView.webview.html = getSidebarHtml(getHighlightColor(), getHideHighlights(context));
+		}
+	}));
 }
 
 // This method is called when your extension is deactivated

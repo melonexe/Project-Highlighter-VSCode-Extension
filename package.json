@@ -56,6 +56,11 @@
       }
       ,
       {
+        "command": "line-highlighter.toggleHideHighlights",
+        "title": "Toggle Hide Highlights"
+      }
+      ,
+      {
         "command": "line-highlighter.calculateSsrcStats",
         "title": "Calculate SSRC stats"
       }
@@ -79,6 +84,12 @@
       {
         "command": "line-highlighter.copyHighlightsCurrentFile",
         "key": "button4",
+        "when": "editorTextFocus"
+      }
+      ,
+      {
+        "command": "line-highlighter.toggleHideHighlights",
+        "key": "ctrl+alt+h",
         "when": "editorTextFocus"
       }
     ],

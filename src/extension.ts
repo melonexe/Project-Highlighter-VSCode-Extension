@@ -498,13 +498,18 @@ export function activate(context: vscode.ExtensionContext) {
 	        const end = selection.end.line;
 	        let highlights = getHighlights(context, editor.document);
 	        const color = getHighlightColor();
-	        for (let line = start; line <= end; line++) {
-	            if (!highlights.some(h => h.line === line)) {
-	                const lineText = editor.document.lineAt(line).text;
-	                const timestamp = extractTimestamp(lineText);
-	                highlights.push({ line, color, timestamp });
-	            }
-	        }
+			for (let line = start; line <= end; line++) {
+				const existing = highlights.find(h => h.line === line);
+				const lineText = editor.document.lineAt(line).text;
+				const timestamp = extractTimestamp(lineText);
+				if (existing) {
+					// Overwrite color and update timestamp when re-highlighting
+					existing.color = color;
+					existing.timestamp = timestamp || existing.timestamp;
+				} else {
+					highlights.push({ line, color, timestamp });
+				}
+			}
 	        setHighlights(context, editor.document, highlights);
 	        updateDecorations(editor, context);
 	        tryPostHighlights();

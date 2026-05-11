@@ -63,6 +63,14 @@
       {
         "command": "line-highlighter.calculateSsrcStats",
         "title": "Calculate SSRC stats"
+      },
+      {
+        "command": "line-highlighter.saveHighlights",
+        "title": "Save Highlights to .hltcf File"
+      },
+      {
+        "command": "line-highlighter.loadHighlights",
+        "title": "Load Highlights from .hltcf File"
       }
     ],
     "keybindings": [

@@ -998,6 +998,91 @@ export function activate(context: vscode.ExtensionContext) {
 	    })
 	);
 
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.saveHighlights', async () => {
+	        const allHighlights = getAllHighlights(context);
+	        const blockNames = getBlockNames(context);
+	        const totalHighlights = Object.values(allHighlights).reduce((s, h) => s + h.length, 0);
+	        if (totalHighlights === 0) {
+	            vscode.window.showInformationMessage('No highlights to save');
+	            return;
+	        }
+	        const uri = await vscode.window.showSaveDialog({
+	            filters: { 'Highlight Config': ['hltcf'] },
+	            defaultUri: vscode.workspace.workspaceFolders?.[0]
+	                ? vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, 'highlights.hltcf')
+	                : undefined,
+	            saveLabel: 'Save Highlights'
+	        });
+	        if (!uri) { return; }
+	        const data = { version: 1, highlights: allHighlights, blockNames };
+	        const json = JSON.stringify(data, null, 2);
+	        await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(json));
+	        vscode.window.showInformationMessage(`Saved ${totalHighlights} highlights to ${uri.fsPath.split(/[\\/]/).pop()}`);
+	    })
+	);
+
+	context.subscriptions.push(
+	    vscode.commands.registerCommand('line-highlighter.loadHighlights', async () => {
+	        const uris = await vscode.window.showOpenDialog({
+	            filters: { 'Highlight Config': ['hltcf'] },
+	            canSelectMany: false,
+	            openLabel: 'Load Highlights'
+	        });
+	        if (!uris || uris.length === 0) { return; }
+	        let data: { version: number, highlights: { [key: string]: Highlight[] }, blockNames?: { [file: string]: { [blockKey: string]: string } } };
+	        try {
+	            const bytes = await vscode.workspace.fs.readFile(uris[0]);
+	            data = JSON.parse(new TextDecoder().decode(bytes));
+	        } catch {
+	            vscode.window.showErrorMessage('Failed to parse file — is it a valid .hltcf file?');
+	            return;
+	        }
+	        if (!data.highlights || typeof data.highlights !== 'object') {
+	            vscode.window.showErrorMessage('Invalid .hltcf file format');
+	            return;
+	        }
+	        const mode = await vscode.window.showQuickPick(
+	            [
+	                { label: 'Replace', description: 'Clear existing highlights and load from file', value: 'replace' },
+	                { label: 'Merge', description: 'Add loaded highlights on top of existing ones', value: 'merge' }
+	            ],
+	            { placeHolder: 'How should the highlights be loaded?' }
+	        );
+	        if (!mode) { return; }
+	        if (mode.value === 'replace') {
+	            context.workspaceState.update(HIGHLIGHT_KEY, data.highlights);
+	            if (data.blockNames) { context.workspaceState.update(BLOCK_NAMES_KEY, data.blockNames); }
+	        } else {
+	            const existing = getAllHighlights(context);
+	            for (const [file, highlights] of Object.entries(data.highlights)) {
+	                if (!existing[file]) {
+	                    existing[file] = highlights;
+	                } else {
+	                    for (const h of highlights) {
+	                        if (!existing[file].some(e => e.line === h.line && e.color === h.color)) {
+	                            existing[file].push(h);
+	                        }
+	                    }
+	                }
+	            }
+	            context.workspaceState.update(HIGHLIGHT_KEY, existing);
+	            if (data.blockNames) {
+	                const existingNames = getBlockNames(context);
+	                for (const [file, names] of Object.entries(data.blockNames)) {
+	                    if (!existingNames[file]) { existingNames[file] = names; }
+	                    else { Object.assign(existingNames[file], names); }
+	                }
+	                context.workspaceState.update(BLOCK_NAMES_KEY, existingNames);
+	            }
+	        }
+	        vscode.window.visibleTextEditors.forEach(editor => updateDecorations(editor, context));
+	        tryPostHighlights();
+	        const totalLoaded = Object.values(data.highlights).reduce((s, h) => s + h.length, 0);
+	        vscode.window.showInformationMessage(`Loaded ${totalLoaded} highlights from ${uris[0].fsPath.split(/[\\/]/).pop()}`);
+	    })
+	);
+
 	// --- Webview Sidebar Provider ---
 	context.subscriptions.push(
 	    vscode.window.registerWebviewViewProvider('line-highlighter.sidebar', {
@@ -1160,6 +1245,10 @@ export function activate(context: vscode.ExtensionContext) {
 	                    vscode.commands.executeCommand('line-highlighter.clearAllHighlightsCurrentFile');
 	                } else if (msg.type === 'clearWorkspace') {
 	                    vscode.commands.executeCommand('line-highlighter.clearAllHighlightsWorkspace');
+	                } else if (msg.type === 'saveHighlights') {
+	                    vscode.commands.executeCommand('line-highlighter.saveHighlights');
+	                } else if (msg.type === 'loadHighlights') {
+	                    vscode.commands.executeCommand('line-highlighter.loadHighlights');
 	                } else if (msg.type === 'batchRemove') {
 	                    const batchEditor = vscode.window.activeTextEditor;
 	                    const byFileR: { [k: string]: { block: number[], color: string }[] } = {};
@@ -1254,7 +1343,12 @@ export function activate(context: vscode.ExtensionContext) {
 	        '<h3>Highlight Color</h3>',
 	        `<div style="margin-bottom:10px;">Choose: ${colorOptions}</div>`,
 	        `<div style="margin-bottom:10px;">Opacity: <input id="opacitySlider" type="range" min="0.1" max="1" step="0.01" value="${opacity}" style="vertical-align:middle;width:120px;" /> <span id="opacityValue">${Math.round(opacity*100)}%</span></div>`,
-	        '<h3>Copy Highlighted Lines</h3>',
+	        '<h3>Save / Load</h3>',
+        '<div style="margin-bottom:10px;">',
+        '<button onclick="vscode.postMessage({ type: \'saveHighlights\' })" style="margin:2px;padding:4px 8px;font-size:12px;background-color:#0078d4;color:white;border:none;">💾 Save to .hltcf</button>',
+        '<button onclick="vscode.postMessage({ type: \'loadHighlights\' })" style="margin:2px;padding:4px 8px;font-size:12px;background-color:#5a5a5a;color:white;border:none;">📂 Load .hltcf</button>',
+        '</div>',
+        '<h3>Copy Highlighted Lines</h3>',
 	        '<div style="margin-bottom:10px;">',
 	        '<button onclick="vscode.postMessage({ type: \'copyByColor\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy by Color</button>',
 	        '<button onclick="vscode.postMessage({ type: \'copyCurrentFile\' })" style="margin:2px;padding:4px 8px;font-size:12px;">Copy Current File</button>',
